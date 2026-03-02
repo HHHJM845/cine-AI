@@ -30,8 +30,10 @@ export function createApp(analyzeImage: AnalyzeImageFn) {
         prompt,
         model: 'gemini-3-flash-preview',
       });
-    } catch {
-      return res.status(500).json({ error: 'analysis failed' });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'unknown error';
+      // Keep details concise so frontend can show actionable diagnostics.
+      return res.status(500).json({ error: `analysis failed: ${reason}` });
     }
   });
 

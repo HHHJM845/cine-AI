@@ -1,7 +1,10 @@
-import 'dotenv/config';
+import { config as loadEnv } from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import { createApp } from './app';
 import { createGeminiImageToPrompt } from './services/gemini-image-to-prompt';
+
+loadEnv({ path: '.env.local' });
+loadEnv();
 
 const apiKey = process.env.GEMINI_API_KEY;
 
