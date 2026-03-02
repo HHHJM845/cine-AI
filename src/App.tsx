@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Compass, Wand2, FolderOpen, Image as ImageIcon, Video, Box, Upload, Download, ArrowLeft, Sparkles, Search, ChevronDown, CheckSquare, ListFilter, LayoutGrid, List, CheckCircle2, Circle, Trash2, Heart, Check, Edit, RefreshCw, MoreHorizontal } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { imageToPrompt } from './services/image-to-prompt';
 
 const MOCK_IMAGES = [
   { id: 1, url: 'https://picsum.photos/seed/cine1/800/1200', prompt: 'A cinematic shot of a futuristic city...', ratio: '2.39:1', model: 'CineVision v2.4', seed: '84729103' },
@@ -175,7 +176,10 @@ export default function App() {
   const [selectedImage, setSelectedImage] = useState<any>(null);
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  const latestUploadSeqRef = useRef(0);
   
   // Generation Batches State
   const [generationBatches, setGenerationBatches] = useState(INITIAL_GENERATION_BATCHES);
@@ -209,16 +213,48 @@ export default function App() {
     });
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const url = URL.createObjectURL(e.target.files[0]);
-      setUploadedImage(url);
-      setIsAnalyzing(true);
-      setTimeout(() => {
-        setPrompt('A stunning cinematic poster featuring dramatic lighting, deep shadows, and a mysterious protagonist standing in the rain.');
-        setIsAnalyzing(false);
-      }, 1500);
+  useEffect(() => {
+    return () => {
+      uploadAbortRef.current?.abort();
+    };
+  }, []);
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      return;
     }
+
+    const nextImageUrl = URL.createObjectURL(file);
+    setUploadedImage(nextImageUrl);
+    setIsAnalyzing(true);
+    setAnalysisError('');
+
+    uploadAbortRef.current?.abort();
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
+    const currentSeq = latestUploadSeqRef.current + 1;
+    latestUploadSeqRef.current = currentSeq;
+
+    try {
+      const generatedPrompt = await imageToPrompt(file, controller.signal);
+      if (currentSeq !== latestUploadSeqRef.current) {
+        return;
+      }
+      setPrompt(generatedPrompt);
+    } catch (error) {
+      if (controller.signal.aborted || currentSeq !== latestUploadSeqRef.current) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : '分析失败，请重试';
+      setAnalysisError(message);
+    } finally {
+      if (currentSeq === latestUploadSeqRef.current) {
+        setIsAnalyzing(false);
+      }
+    }
+
+    e.target.value = '';
   };
 
   const handleReEdit = (batch: any) => {
@@ -529,6 +565,9 @@ export default function App() {
                     )}
                   </div>
                 </div>
+                {analysisError && !isAnalyzing && (
+                  <p className="text-xs text-red-400 mt-2">{analysisError}</p>
+                )}
               </div>
 
               {/* Prompt Input */}
@@ -929,4 +968,3 @@ function MenuButton({ icon, label, active, onClick }: { icon: React.ReactNode, l
     </button>
   );
 }
-
