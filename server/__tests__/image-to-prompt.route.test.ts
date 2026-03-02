@@ -26,4 +26,29 @@ describe('POST /api/image-to-prompt', () => {
       model: 'gemini-3-flash-preview',
     });
   });
+
+  it('returns 415 for unsupported mime type', async () => {
+    const app = createApp(async () => 'unused');
+    const res = await request(app)
+      .post('/api/image-to-prompt')
+      .attach('file', Buffer.from('hello'), {
+        filename: 'a.txt',
+        contentType: 'text/plain',
+      });
+
+    expect(res.status).toBe(415);
+  });
+
+  it('returns 413 when file too large', async () => {
+    const app = createApp(async () => 'unused');
+    const big = Buffer.alloc(10 * 1024 * 1024 + 1, 1);
+    const res = await request(app)
+      .post('/api/image-to-prompt')
+      .attach('file', big, {
+        filename: 'big.png',
+        contentType: 'image/png',
+      });
+
+    expect(res.status).toBe(413);
+  });
 });
