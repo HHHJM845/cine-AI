@@ -137,6 +137,7 @@ type UiBatch = {
   prompt: string;
   model: string;
   ratio: string;
+  sceneAssistUsed: boolean;
   createdAt: number;
   resolution: string;
   requestedCount: 1 | 2 | 3 | 4;
@@ -151,6 +152,7 @@ function toUiBatch(batch: GenerationBatch): UiBatch {
     prompt: batch.prompt,
     model: batch.model,
     ratio: batch.aspectRatio,
+    sceneAssistUsed: batch.sceneAssistUsed,
     createdAt: batch.createdAt,
     resolution: `${batch.requestedCount} image(s)`,
     requestedCount: batch.requestedCount as 1 | 2 | 3 | 4,
@@ -184,12 +186,13 @@ function createLocalId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function toUiBatchFromJob(job: GenerationUiJob): UiBatch {
+function toUiBatchFromJob(job: GenerationUiJob, sceneAssistUsed = false): UiBatch {
   return {
     id: job.id,
     prompt: job.prompt,
     model: job.model,
     ratio: job.aspectRatio,
+    sceneAssistUsed,
     createdAt: job.createdAt,
     resolution: `${job.count} image(s)`,
     requestedCount: job.count,
@@ -455,7 +458,9 @@ export default function App() {
   const executeGenerationJob = async (job: QueueJob) => {
     const runningJob = markJobRunning(buildQueuedUiJob(job));
     setGenerationBatches((prev) =>
-      prev.map((batch) => (batch.id === job.localBatchId ? toUiBatchFromJob(runningJob) : batch)),
+      prev.map((batch) =>
+        batch.id === job.localBatchId ? toUiBatchFromJob(runningJob, batch.sceneAssistUsed) : batch,
+      ),
     );
 
     try {
@@ -468,7 +473,7 @@ export default function App() {
         subSceneId: job.subSceneId,
       });
       const completedJob = applyBatchToJob(runningJob, nextBatch);
-      const completedBatch = toUiBatchFromJob(completedJob);
+      const completedBatch = toUiBatchFromJob(completedJob, nextBatch.sceneAssistUsed);
       setGenerationBatches((prev) =>
         prev.map((batch) =>
           batch.id === job.localBatchId
@@ -477,6 +482,7 @@ export default function App() {
                 id: nextBatch.id,
                 model: nextBatch.model,
                 ratio: nextBatch.aspectRatio,
+                sceneAssistUsed: nextBatch.sceneAssistUsed,
                 createdAt: nextBatch.createdAt,
                 requestedCount: nextBatch.requestedCount as 1 | 2 | 3 | 4,
               }
@@ -487,7 +493,9 @@ export default function App() {
       const message = error instanceof Error ? error.message : '生成失败，请稍后重试';
       const failedJob = markJobRequestFailed(runningJob, message);
       setGenerationBatches((prev) =>
-        prev.map((batch) => (batch.id === job.localBatchId ? toUiBatchFromJob(failedJob) : batch)),
+        prev.map((batch) =>
+          batch.id === job.localBatchId ? toUiBatchFromJob(failedJob, batch.sceneAssistUsed) : batch,
+        ),
       );
       setGenerationError(message);
     } finally {
@@ -569,7 +577,7 @@ export default function App() {
       status: 'queued',
     };
     const queuedUiJob = buildQueuedUiJob(queueJob);
-    setGenerationBatches((prev) => [toUiBatchFromJob(queuedUiJob), ...prev]);
+    setGenerationBatches((prev) => [toUiBatchFromJob(queuedUiJob, queueJob.enableSceneAssist), ...prev]);
     generationJobsRef.current = [queueJob, ...generationJobsRef.current];
     syncQueueStats();
     dispatchGenerationJobs();
@@ -1119,6 +1127,14 @@ export default function App() {
                         <span>{batch.model}</span>
                         <span>|</span>
                         <span>{batch.ratio}</span>
+                        {batch.sceneAssistUsed && (
+                          <>
+                            <span>|</span>
+                            <span className="rounded border border-[#00FFFF]/40 bg-[#00FFFF]/10 px-2 py-0.5 text-[#00FFFF]">
+                              场景辅助优化
+                            </span>
+                          </>
+                        )}
                         <span>|</span>
                         <span>{toBatchStatusLabel(batch.status)}</span>
                       </div>

@@ -15,6 +15,7 @@ describe('GET /api/generation-batches', () => {
           prompt: 'x',
           aspectRatio: '16:9',
           requestedCount: 1,
+          sceneAssistUsed: false,
           model: 'gemini-3-pro-image-preview',
           status: 'completed',
           createdAt: 1,

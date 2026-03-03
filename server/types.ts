@@ -37,6 +37,7 @@ export type GenerationBatch = {
   prompt: string;
   aspectRatio: AspectRatio;
   requestedCount: number;
+  sceneAssistUsed: boolean;
   model: string;
   status: GenerationBatchStatus;
   createdAt: number;

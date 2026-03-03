@@ -7,6 +7,7 @@ type GenerationRepositoryLike = {
     prompt: string;
     aspectRatio: string;
     requestedCount: number;
+    sceneAssistUsed: boolean;
     model: string;
     status: GenerationBatchStatus;
     createdAt: number;
@@ -191,6 +192,7 @@ export function createGenerateImagesUseCase(deps: CreateGenerateImagesUseCaseDep
       prompt: input.prompt,
       aspectRatio: input.aspectRatio,
       requestedCount: input.count,
+      sceneAssistUsed: Boolean(input.enableSceneAssist),
       model: MODEL_ID,
       status,
       createdAt,
@@ -202,6 +204,7 @@ export function createGenerateImagesUseCase(deps: CreateGenerateImagesUseCaseDep
       prompt: batch.prompt,
       aspectRatio: batch.aspectRatio,
       requestedCount: batch.requestedCount,
+      sceneAssistUsed: batch.sceneAssistUsed,
       model: batch.model,
       status: batch.status,
       createdAt: batch.createdAt,

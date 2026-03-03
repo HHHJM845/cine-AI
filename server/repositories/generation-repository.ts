@@ -5,6 +5,7 @@ type BatchRow = {
   prompt: string;
   aspect_ratio: string;
   requested_count: number;
+  scene_assist_used: number;
   model: string;
   status: GenerationBatchStatus;
   created_at: number;
@@ -35,6 +36,7 @@ type InsertBatchInput = {
   prompt: string;
   aspectRatio: string;
   requestedCount: number;
+  sceneAssistUsed: boolean;
   model: string;
   status: GenerationBatchStatus;
   createdAt: number;
@@ -56,6 +58,7 @@ function toBatchDto(row: BatchRow, items: ItemRow[]): GenerationBatch {
     prompt: row.prompt,
     aspectRatio: row.aspect_ratio as GenerationBatch['aspectRatio'],
     requestedCount: row.requested_count,
+    sceneAssistUsed: Boolean(row.scene_assist_used),
     model: row.model,
     status: row.status,
     createdAt: row.created_at,
@@ -71,7 +74,7 @@ function toBatchDto(row: BatchRow, items: ItemRow[]): GenerationBatch {
 
 export function createGenerationRepository(db: any) {
   const insertBatchStmt = db.prepare(
-    'INSERT INTO generation_batches (id, prompt, aspect_ratio, requested_count, model, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO generation_batches (id, prompt, aspect_ratio, requested_count, scene_assist_used, model, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
   );
   const insertItemStmt = db.prepare(
     'INSERT INTO generation_items (id, batch_id, position, status, image_path, error_message, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -84,7 +87,16 @@ export function createGenerationRepository(db: any) {
 
   return {
     insertBatch(input: InsertBatchInput) {
-      insertBatchStmt.run(input.id, input.prompt, input.aspectRatio, input.requestedCount, input.model, input.status, input.createdAt);
+      insertBatchStmt.run(
+        input.id,
+        input.prompt,
+        input.aspectRatio,
+        input.requestedCount,
+        input.sceneAssistUsed ? 1 : 0,
+        input.model,
+        input.status,
+        input.createdAt,
+      );
     },
     insertItem(input: InsertItemInput) {
       insertItemStmt.run(input.id, input.batchId, input.position, input.status, input.imagePath, input.errorMessage, input.createdAt);

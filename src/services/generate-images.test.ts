@@ -11,6 +11,7 @@ describe('generateImages', () => {
           prompt: 'x',
           aspectRatio: '16:9',
           requestedCount: 1,
+          sceneAssistUsed: true,
           model: 'm',
           status: 'completed',
           createdAt: 1,

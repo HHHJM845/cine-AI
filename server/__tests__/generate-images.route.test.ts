@@ -30,6 +30,7 @@ describe('POST /api/generate-images', () => {
         prompt: 'x',
         aspectRatio: '16:9',
         requestedCount: 3,
+        sceneAssistUsed: false,
         model: 'gemini-3-pro-image-preview',
         status: 'partial_failed',
         createdAt: 1,

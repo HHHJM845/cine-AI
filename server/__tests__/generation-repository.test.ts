@@ -30,6 +30,7 @@ describe('generation repository', () => {
       prompt: 'x',
       aspectRatio: '16:9',
       requestedCount: 2,
+      sceneAssistUsed: true,
       model: 'gemini-3-pro-image-preview',
       status: 'partial_failed',
       createdAt: 1,
@@ -57,6 +58,7 @@ describe('generation repository', () => {
     const output = repo.listBatches({ limit: 20 });
 
     expect(output).toHaveLength(1);
+    expect(output[0].sceneAssistUsed).toBe(true);
     expect(output[0].items).toHaveLength(2);
     expect(output[0].items[0].imageUrl).toBe('/generated/2026/03/02/a.png');
     db.close();
@@ -72,6 +74,7 @@ describe('generation repository', () => {
       prompt: 'x',
       aspectRatio: '16:9',
       requestedCount: 1,
+      sceneAssistUsed: false,
       model: 'gemini-3-pro-image-preview',
       status: 'completed',
       createdAt: 1,

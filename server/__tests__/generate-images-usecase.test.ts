@@ -20,9 +20,13 @@ describe('createGenerateImagesUseCase', () => {
       prompt: 'x',
       aspectRatio: '16:9',
       count: 3,
+      enableSceneAssist: true,
+      primarySceneId: 'poster',
+      subSceneId: 'movie_poster',
     });
 
     expect(result.items).toHaveLength(3);
+    expect(result.sceneAssistUsed).toBe(true);
     expect(result.items[0].status).toBe('success');
     expect(result.items[1].status).toBe('failed');
     expect(insertBatch).toHaveBeenCalledTimes(1);
@@ -56,6 +60,7 @@ describe('createGenerateImagesUseCase', () => {
       prompt: 'x',
       aspectRatio: '16:9',
       count: 4,
+      enableSceneAssist: false,
     });
 
     expect(generateFromGemini).toHaveBeenCalledTimes(4);
@@ -69,6 +74,7 @@ describe('createGenerateImagesUseCase', () => {
     }
 
     expect(result.status).toBe('partial_failed');
+    expect(result.sceneAssistUsed).toBe(false);
     expect(result.items).toHaveLength(4);
     expect(result.items[0].status).toBe('success');
     expect(result.items[1]).toMatchObject({

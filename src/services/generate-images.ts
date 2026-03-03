@@ -20,6 +20,7 @@ export type GenerationBatch = {
   prompt: string;
   aspectRatio: GenerateImagesRequest['aspectRatio'];
   requestedCount: number;
+  sceneAssistUsed: boolean;
   model: string;
   status: 'completed' | 'partial_failed' | 'failed';
   createdAt: number;

@@ -14,6 +14,7 @@ export function createDb(filePath: string) {
       prompt TEXT NOT NULL,
       aspect_ratio TEXT NOT NULL,
       requested_count INTEGER NOT NULL,
+      scene_assist_used INTEGER NOT NULL DEFAULT 0,
       model TEXT NOT NULL,
       status TEXT NOT NULL,
       created_at INTEGER NOT NULL
@@ -30,6 +31,11 @@ export function createDb(filePath: string) {
       FOREIGN KEY (batch_id) REFERENCES generation_batches(id)
     );
   `);
+
+  const batchColumns = db.prepare("PRAGMA table_info(generation_batches)").all() as Array<{ name: string }>;
+  if (!batchColumns.some((column) => column.name === 'scene_assist_used')) {
+    db.exec('ALTER TABLE generation_batches ADD COLUMN scene_assist_used INTEGER NOT NULL DEFAULT 0');
+  }
 
   return db;
 }
