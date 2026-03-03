@@ -137,4 +137,62 @@ describe('createAiServicesFromEnv', () => {
       authMode: 'bearer',
     });
   });
+
+  it('supports PROMPT_MERGE_PROVIDER=openai while keeping generation provider unchanged', () => {
+    const analyzeImage = vi.fn(async () => 'prompt');
+    const generateFromModel = vi.fn(async () => []);
+    const mergePrompt = vi.fn(async () => 'merged prompt');
+    const makeGeminiClient = vi.fn(() => ({ id: 'gemini-client' }));
+    const createGeminiImageToPrompt = vi.fn(() => analyzeImage);
+    const createGeminiImageGenerator = vi.fn(() => generateFromModel);
+    const createOpenAIPromptMerge = vi.fn(() => mergePrompt);
+
+    const output = createAiServicesFromEnv(
+      {
+        AI_PROVIDER: 'gemini',
+        IMAGE_TO_PROMPT_PROVIDER: 'gemini',
+        IMAGE_GENERATION_PROVIDER: 'gemini',
+        PROMPT_MERGE_PROVIDER: 'openai',
+        GEMINI_API_KEY: 'g-key',
+        OPENAI_API_KEY: 'o-key',
+      },
+      {
+        makeGeminiClient: makeGeminiClient as any,
+        createGeminiImageToPrompt: createGeminiImageToPrompt as any,
+        createGeminiImageGenerator: createGeminiImageGenerator as any,
+        createOpenAIPromptMerge: createOpenAIPromptMerge as any,
+      } as any,
+    );
+
+    expect(output.mergeProvider).toBe('openai');
+    expect(createOpenAIPromptMerge).toHaveBeenCalledTimes(1);
+  });
+
+  it('defaults merge provider to analyze provider when PROMPT_MERGE_PROVIDER is not set', () => {
+    const analyzeImage = vi.fn(async () => 'prompt');
+    const generateFromModel = vi.fn(async () => []);
+    const mergePrompt = vi.fn(async () => 'merged prompt');
+    const makeGeminiClient = vi.fn(() => ({ id: 'gemini-client' }));
+    const createGeminiImageToPrompt = vi.fn(() => analyzeImage);
+    const createGeminiImageGenerator = vi.fn(() => generateFromModel);
+    const createGeminiPromptMerge = vi.fn(() => mergePrompt);
+
+    const output = createAiServicesFromEnv(
+      {
+        IMAGE_TO_PROMPT_PROVIDER: 'gemini',
+        IMAGE_GENERATION_PROVIDER: 'openai',
+        GEMINI_API_KEY: 'g-key',
+        OPENAI_API_KEY: 'o-key',
+      },
+      {
+        makeGeminiClient: makeGeminiClient as any,
+        createGeminiImageToPrompt: createGeminiImageToPrompt as any,
+        createGeminiImageGenerator: createGeminiImageGenerator as any,
+        createGeminiPromptMerge: createGeminiPromptMerge as any,
+      } as any,
+    );
+
+    expect(output.mergeProvider).toBe('gemini');
+    expect(createGeminiPromptMerge).toHaveBeenCalledTimes(1);
+  });
 });
