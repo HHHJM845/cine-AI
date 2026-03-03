@@ -16,7 +16,7 @@ type BatchLike = {
   createdAt?: number;
   images: Array<{
     id: string;
-    status: 'success' | 'failed';
+    status: 'loading' | 'success' | 'failed';
     url?: string;
   }>;
 };

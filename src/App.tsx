@@ -8,6 +8,8 @@ import { buildDownloadFileName, downloadImage, downloadImages } from './services
 import { deleteGenerationAssets } from './services/delete-generation-assets';
 import { SUPPORTED_ASPECT_RATIOS, toAspectRatio } from './utils/aspect-ratios';
 import { toAssetItemsFromBatches } from './features/assets/asset-items';
+import { dequeueStartableJobs } from './features/generation/job-queue';
+import { applyBatchToJob, createQueuedJob, markJobRequestFailed, markJobRunning, type GenerationUiJob } from './features/generation/job-state';
 import { EXPLORE_IMAGES as EXPLORE_IMAGES_LIBRARY } from './data/explore-images';
 
 const MOCK_IMAGES = [
@@ -125,7 +127,8 @@ function toGenerateCount(value: number): GenerateImagesRequest['count'] | null {
 type UiBatchImage = {
   id: string;
   url?: string;
-  status: 'success' | 'failed';
+  position: number;
+  status: 'loading' | 'success' | 'failed';
   errorMessage?: string;
 };
 
@@ -137,8 +140,9 @@ type UiBatch = {
   createdAt: number;
   resolution: string;
   requestedCount: 1 | 2 | 3 | 4;
-  status: 'completed' | 'partial_failed' | 'failed';
+  status: 'queued' | 'running' | 'completed' | 'partial_failed' | 'failed';
   images: UiBatchImage[];
+  errorMessage?: string;
 };
 
 function toUiBatch(batch: GenerationBatch): UiBatch {
@@ -153,11 +157,72 @@ function toUiBatch(batch: GenerationBatch): UiBatch {
     status: batch.status,
     images: batch.items.map((item) => ({
       id: item.id,
+      position: item.position,
       url: item.imageUrl,
       status: item.status,
       errorMessage: item.errorMessage,
     })),
   };
+}
+
+const MAX_CONCURRENT_GENERATIONS = 2;
+
+type QueueJob = {
+  id: string;
+  localBatchId: string;
+  prompt: string;
+  aspectRatio: GenerateImagesRequest['aspectRatio'];
+  count: GenerateImagesRequest['count'];
+  createdAt: number;
+  status: 'queued' | 'running';
+};
+
+function createLocalId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function toUiBatchFromJob(job: GenerationUiJob): UiBatch {
+  return {
+    id: job.id,
+    prompt: job.prompt,
+    model: job.model,
+    ratio: job.aspectRatio,
+    createdAt: job.createdAt,
+    resolution: `${job.count} image(s)`,
+    requestedCount: job.count,
+    status:
+      job.status === 'queued'
+        ? 'queued'
+        : job.status === 'running'
+          ? 'running'
+          : job.status === 'failed'
+            ? 'failed'
+            : job.batchStatus ?? 'completed',
+    images: job.previewItems.map((item) => ({
+      id: item.id,
+      position: item.position,
+      url: item.url,
+      status: item.status,
+      errorMessage: item.errorMessage,
+    })),
+    errorMessage: job.errorMessage,
+  };
+}
+
+function toBatchStatusLabel(status: UiBatch['status']): string {
+  if (status === 'queued') {
+    return '排队中';
+  }
+  if (status === 'running') {
+    return '生成中';
+  }
+  if (status === 'partial_failed') {
+    return '部分完成';
+  }
+  if (status === 'failed') {
+    return '失败';
+  }
+  return '已完成';
 }
 
 const SCENE_OPTIONS = [
@@ -231,12 +296,14 @@ export default function App() {
   const [analysisError, setAnalysisError] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [generateCount, setGenerateCount] = useState<1 | 2 | 3 | 4>(1);
-  const [isGenerating, setIsGenerating] = useState(false);
   const [isLoadingBatches, setIsLoadingBatches] = useState(false);
   const [generationError, setGenerationError] = useState('');
   const [downloadMessage, setDownloadMessage] = useState('');
   const uploadAbortRef = useRef<AbortController | null>(null);
   const latestUploadSeqRef = useRef(0);
+  const generationJobsRef = useRef<QueueJob[]>([]);
+  const generationDispatchingRef = useRef(false);
+  const [queueStats, setQueueStats] = useState({ queued: 0, running: 0 });
   
   // Generation Batches State
   const [generationBatches, setGenerationBatches] = useState<UiBatch[]>([]);
@@ -291,7 +358,13 @@ export default function App() {
     fetchGenerationBatches()
       .then((batches) => {
         if (!active) return;
-        setGenerationBatches(batches.map(toUiBatch));
+        const serverBatches = batches.map(toUiBatch);
+        setGenerationBatches((prev) => {
+          const inFlightBatches = prev.filter((batch) => batch.status === 'queued' || batch.status === 'running');
+          const inFlightIds = new Set(inFlightBatches.map((batch) => batch.id));
+          const dedupedServer = serverBatches.filter((batch) => !inFlightIds.has(batch.id));
+          return [...inFlightBatches, ...dedupedServer];
+        });
       })
       .catch((error) => {
         if (!active) return;
@@ -358,11 +431,99 @@ export default function App() {
     }
   };
 
-  const runGeneration = async (input: { prompt: string; aspectRatio: string; count: number }) => {
-    if (isGenerating) {
+  const syncQueueStats = () => {
+    const running = generationJobsRef.current.filter((job) => job.status === 'running').length;
+    const queued = generationJobsRef.current.filter((job) => job.status === 'queued').length;
+    setQueueStats({ queued, running });
+  };
+
+  const buildQueuedUiJob = (job: QueueJob): GenerationUiJob =>
+    createQueuedJob(
+      {
+        prompt: job.prompt,
+        aspectRatio: job.aspectRatio,
+        count: job.count,
+        createdAt: job.createdAt,
+      },
+      { idFactory: () => job.localBatchId },
+    );
+
+  const executeGenerationJob = async (job: QueueJob) => {
+    const runningJob = markJobRunning(buildQueuedUiJob(job));
+    setGenerationBatches((prev) =>
+      prev.map((batch) => (batch.id === job.localBatchId ? toUiBatchFromJob(runningJob) : batch)),
+    );
+
+    try {
+      const nextBatch = await generateImages({
+        prompt: job.prompt,
+        aspectRatio: job.aspectRatio,
+        count: job.count,
+      });
+      const completedJob = applyBatchToJob(runningJob, nextBatch);
+      const completedBatch = toUiBatchFromJob(completedJob);
+      setGenerationBatches((prev) =>
+        prev.map((batch) =>
+          batch.id === job.localBatchId
+            ? {
+                ...completedBatch,
+                id: nextBatch.id,
+                model: nextBatch.model,
+                ratio: nextBatch.aspectRatio,
+                createdAt: nextBatch.createdAt,
+                requestedCount: nextBatch.requestedCount as 1 | 2 | 3 | 4,
+              }
+            : batch,
+        ),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '生成失败，请稍后重试';
+      const failedJob = markJobRequestFailed(runningJob, message);
+      setGenerationBatches((prev) =>
+        prev.map((batch) => (batch.id === job.localBatchId ? toUiBatchFromJob(failedJob) : batch)),
+      );
+      setGenerationError(message);
+    } finally {
+      generationJobsRef.current = generationJobsRef.current.filter((item) => item.id !== job.id);
+      syncQueueStats();
+      dispatchGenerationJobs();
+    }
+  };
+
+  const dispatchGenerationJobs = () => {
+    if (generationDispatchingRef.current) {
       return;
     }
+    generationDispatchingRef.current = true;
 
+    try {
+      while (true) {
+        const runningCount = generationJobsRef.current.filter((job) => job.status === 'running').length;
+        const queueSnapshot = generationJobsRef.current.map((job) => ({
+          id: job.id,
+          status: job.status,
+          createdAt: job.createdAt,
+        }));
+        const { startIds } = dequeueStartableJobs(queueSnapshot, runningCount, MAX_CONCURRENT_GENERATIONS);
+        if (startIds.length === 0) {
+          break;
+        }
+
+        const nextJob = generationJobsRef.current.find((job) => job.id === startIds[0] && job.status === 'queued');
+        if (!nextJob) {
+          break;
+        }
+
+        nextJob.status = 'running';
+        syncQueueStats();
+        void executeGenerationJob({ ...nextJob });
+      }
+    } finally {
+      generationDispatchingRef.current = false;
+    }
+  };
+
+  const runGeneration = async (input: { prompt: string; aspectRatio: string; count: number }) => {
     const normalizedPrompt = input.prompt.trim();
     if (!normalizedPrompt) {
       setGenerationError('提示词不能为空');
@@ -384,22 +545,24 @@ export default function App() {
     setPrompt(normalizedPrompt);
     setAspectRatio(nextAspectRatio);
     setGenerateCount(nextCount);
-    setIsGenerating(true);
     setGenerationError('');
 
-    try {
-      const nextBatch = await generateImages({
-        prompt: normalizedPrompt,
-        aspectRatio: nextAspectRatio,
-        count: nextCount,
-      });
-      setGenerationBatches((prev) => [toUiBatch(nextBatch), ...prev]);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '生成失败，请稍后重试';
-      setGenerationError(message);
-    } finally {
-      setIsGenerating(false);
-    }
+    const createdAt = Date.now();
+    const localBatchId = createLocalId('queued_batch');
+    const queueJob: QueueJob = {
+      id: createLocalId('job'),
+      localBatchId,
+      prompt: normalizedPrompt,
+      aspectRatio: nextAspectRatio,
+      count: nextCount,
+      createdAt,
+      status: 'queued',
+    };
+    const queuedUiJob = buildQueuedUiJob(queueJob);
+    setGenerationBatches((prev) => [toUiBatchFromJob(queuedUiJob), ...prev]);
+    generationJobsRef.current = [queueJob, ...generationJobsRef.current];
+    syncQueueStats();
+    dispatchGenerationJobs();
   };
 
   const handleRegenerate = async (batch: UiBatch) => {
@@ -422,6 +585,11 @@ export default function App() {
       count: generateCount,
     });
   };
+
+  const generateButtonLabel =
+    queueStats.running > 0 || queueStats.queued > 0
+      ? `继续提交（运行中 ${queueStats.running}/${MAX_CONCURRENT_GENERATIONS}，排队 ${queueStats.queued}）`
+      : '生成';
 
   const assetItems = useMemo(() => toAssetItemsFromBatches(generationBatches), [generationBatches]);
 
@@ -872,11 +1040,10 @@ export default function App() {
               {/* Generate Button */}
               <button
                 onClick={handleGenerate}
-                disabled={isGenerating}
-                className={`w-full py-4 mt-auto rounded-xl font-medium tracking-wide transition-all duration-300 flex items-center justify-center gap-2 ${isGenerating ? 'bg-white/30 text-black/60 cursor-not-allowed' : 'bg-white text-black hover:bg-[#00FFFF] hover:shadow-[0_0_20px_rgba(0,255,255,0.6)]'}`}
+                className="w-full py-4 mt-auto rounded-xl font-medium tracking-wide transition-all duration-300 flex items-center justify-center gap-2 bg-white text-black hover:bg-[#00FFFF] hover:shadow-[0_0_20px_rgba(0,255,255,0.6)]"
               >
                 <Wand2 size={18} />
-                {isGenerating ? '生成中...' : '生成'}
+                {generateButtonLabel}
               </button>
             </section>
 
@@ -904,6 +1071,12 @@ export default function App() {
 
               {/* Batches */}
               <div className="flex-1 flex flex-col gap-8">
+                {(queueStats.running > 0 || queueStats.queued > 0) && (
+                  <div className="text-xs text-white/50">
+                    运行中 {queueStats.running}，排队中 {queueStats.queued}
+                  </div>
+                )}
+
                 {isLoadingBatches && (
                   <div className="text-sm text-white/40">加载历史批次中...</div>
                 )}
@@ -922,13 +1095,24 @@ export default function App() {
                         <span>|</span>
                         <span>{batch.ratio}</span>
                         <span>|</span>
-                        <span>{batch.status}</span>
+                        <span>{toBatchStatusLabel(batch.status)}</span>
                       </div>
                     </div>
 
                     {/* Batch Images */}
                     <div className="columns-2 lg:columns-3 2xl:columns-4 gap-3">
                       {batch.images.map((img, index) => {
+                        if (img.status === 'loading') {
+                          return (
+                            <div key={img.id} className="mb-3 break-inside-avoid">
+                              <div className="relative overflow-hidden bg-[#121212] border border-white/20 p-3 flex flex-col justify-center items-center text-center min-h-[120px]">
+                                <RefreshCw className="text-[#00FFFF] mb-2 animate-spin" size={18} />
+                                <p className="text-xs text-white/70">第 {img.position} 张生成中...</p>
+                              </div>
+                            </div>
+                          );
+                        }
+
                         if (img.status === 'failed' || !img.url) {
                           return (
                             <div key={img.id} className="mb-3 break-inside-avoid">
@@ -975,22 +1159,42 @@ export default function App() {
 
                     {/* Batch Footer Actions */}
                     <div className="flex items-center gap-3 mt-1">
+                      {(batch.status === 'queued' || batch.status === 'running') && (
+                        <div className="text-xs text-white/40">该批次正在处理中，完成后可重新编辑或再次生成。</div>
+                      )}
                       <button 
                         onClick={() => handleReEdit(batch)}
-                        className="flex items-center gap-2 px-4 py-2 bg-[#1a1a1a] hover:bg-[#222] rounded-lg text-sm text-white/80 transition-colors"
+                        disabled={batch.status === 'queued' || batch.status === 'running'}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${
+                          batch.status === 'queued' || batch.status === 'running'
+                            ? 'bg-[#1a1a1a] text-white/30 cursor-not-allowed'
+                            : 'bg-[#1a1a1a] hover:bg-[#222] text-white/80'
+                        }`}
                       >
                         <Edit size={16} /> 重新编辑
                       </button>
                       <button 
                         onClick={() => { void handleRegenerate(batch); }}
-                        className="flex items-center gap-2 px-4 py-2 bg-[#1a1a1a] hover:bg-[#222] rounded-lg text-sm text-white/80 transition-colors"
+                        disabled={batch.status === 'queued' || batch.status === 'running'}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${
+                          batch.status === 'queued' || batch.status === 'running'
+                            ? 'bg-[#1a1a1a] text-white/30 cursor-not-allowed'
+                            : 'bg-[#1a1a1a] hover:bg-[#222] text-white/80'
+                        }`}
                       >
                         <RefreshCw size={16} /> 再次生成
                       </button>
                       <div className="relative">
                         <button 
+                          disabled={batch.status === 'queued' || batch.status === 'running'}
                           onClick={() => setOpenBatchMenu(openBatchMenu === batch.id ? null : batch.id)}
-                          className={`flex items-center justify-center w-9 h-9 rounded-lg text-white/80 transition-colors ${openBatchMenu === batch.id ? 'bg-[#222]' : 'bg-[#1a1a1a] hover:bg-[#222]'}`}
+                          className={`flex items-center justify-center w-9 h-9 rounded-lg transition-colors ${
+                            batch.status === 'queued' || batch.status === 'running'
+                              ? 'bg-[#1a1a1a] text-white/30 cursor-not-allowed'
+                              : openBatchMenu === batch.id
+                                ? 'bg-[#222] text-white/80'
+                                : 'bg-[#1a1a1a] hover:bg-[#222] text-white/80'
+                          }`}
                         >
                           <MoreHorizontal size={16} />
                         </button>
