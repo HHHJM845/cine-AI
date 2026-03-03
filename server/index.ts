@@ -16,10 +16,15 @@ const generatedStorageDir = path.resolve(process.env.GENERATED_STORAGE_DIR || 's
 const db = createDb(dbPath);
 const repository = createGenerationRepository(db);
 const storage = createGeneratedImageStorage(generatedStorageDir);
+const multiImageStrategy =
+  aiServices.generateProvider === 'openai' ? 'single_request' : 'fanout_single_image';
+const fanoutConcurrency = Number(process.env.IMAGE_GENERATION_FANOUT_CONCURRENCY || 2);
 const generateImages = createGenerateImagesUseCase({
   repository,
   storage,
   generateFromGemini: aiServices.generateFromModel,
+  multiImageStrategy,
+  fanoutConcurrency,
 });
 const app = createApp({
   analyzeImage: aiServices.analyzeImage,
