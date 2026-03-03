@@ -16,6 +16,7 @@ describe('POST /api/generate-images', () => {
       prompt: '',
       aspectRatio: '16:9',
       count: 2,
+      enableSceneAssist: false,
     });
 
     expect(res.status).toBe(400);
@@ -45,9 +46,32 @@ describe('POST /api/generate-images', () => {
       prompt: 'x',
       aspectRatio: '16:9',
       count: 3,
+      enableSceneAssist: false,
     });
 
     expect(res.status).toBe(200);
     expect(res.body.batch.items).toHaveLength(3);
+  });
+
+  it('returns 500 when prompt merge fails under scene assist mode', async () => {
+    const app = createApp({
+      analyzeImage: async () => 'unused',
+      generateImages: async () => {
+        throw new Error('prompt merge failed: quota exceeded');
+      },
+      listGenerationBatches: async () => [],
+    });
+
+    const res = await request(app).post('/api/generate-images').send({
+      prompt: 'x',
+      aspectRatio: '16:9',
+      count: 1,
+      enableSceneAssist: true,
+      primarySceneId: 'poster',
+      subSceneId: 'movie_poster',
+    });
+
+    expect(res.status).toBe(500);
+    expect(String(res.body.error || '')).toContain('prompt merge failed: quota exceeded');
   });
 });
