@@ -18,6 +18,7 @@ export default defineConfig(({mode}) => {
     server: {
       proxy: {
         '/api': 'http://127.0.0.1:8787',
+        '/generated': 'http://127.0.0.1:8787',
       },
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify this file watching behavior to prevent flickering during agent edits.

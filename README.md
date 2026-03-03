@@ -56,3 +56,27 @@ npm run dev
 2. 后端使用 `gemini-3-flash-preview` 分析图像
 3. 返回详细英文提示词并覆盖输入框
 4. 若失败，保留原提示词并显示失败提示
+
+## 图片生成功能（Nano Banana Pro）
+
+- 模型固定：`gemini-3-pro-image-preview`
+- 生成接口：`POST /api/generate-images`
+- 历史接口：`GET /api/generation-batches?limit=20`
+- 结果持久化：图片写入本地磁盘，批次与状态写入 SQLite
+
+### 新增环境变量
+
+```bash
+SQLITE_PATH=storage/cine.db
+GENERATED_STORAGE_DIR=storage/generated
+```
+
+### 生成请求示例
+
+```json
+{
+  "prompt": "cinematic sci-fi city at night",
+  "aspectRatio": "16:9",
+  "count": 4
+}
+```
