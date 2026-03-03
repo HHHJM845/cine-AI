@@ -80,3 +80,19 @@ GENERATED_STORAGE_DIR=storage/generated
   "count": 4
 }
 ```
+
+## Provider 行为说明（2026-03）
+
+- 图生文（`POST /api/image-to-prompt`）固定使用 suxi，默认模型 `gpt-4o-mini`。
+- Prompt 优化（场景辅助合并）固定使用 suxi，默认模型 `deepseek-v3`。
+- 文生图（`POST /api/generate-images`）继续使用 `IMAGE_GENERATION_PROVIDER` 决定 `gemini/openai/gemini_http`。
+- 文本链路不再使用 `IMAGE_TO_PROMPT_PROVIDER` 和 `PROMPT_MERGE_PROVIDER`。
+
+对应环境变量：
+
+```bash
+SUXI_BASE_URL=https://new.suxi.ai/v1
+SUXI_API_KEY=你的_suxi_key
+SUXI_VISION_MODEL=gpt-4o-mini
+SUXI_TEXT_MODEL=deepseek-v3
+```

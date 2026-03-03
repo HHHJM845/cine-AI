@@ -1,20 +1,21 @@
 import { GoogleGenAI } from '@google/genai';
 import type { AnalyzeImageFn, GenerateImagesInput, GeneratedImageBinary } from '../types';
 import { createGeminiImageGenerator as createGeminiImageGeneratorDefault } from './gemini-image-generator';
-import { createGeminiImageToPrompt as createGeminiImageToPromptDefault } from './gemini-image-to-prompt';
 import { createGeminiHttpImageGenerator as createGeminiHttpImageGeneratorDefault } from './gemini-http-image-generator';
-import { createGeminiPromptMerge as createGeminiPromptMergeDefault } from './gemini-prompt-merge';
 import { createOpenAIImageGenerator as createOpenAIImageGeneratorDefault } from './openai-image-generator';
 import { createOpenAIImageToPrompt as createOpenAIImageToPromptDefault } from './openai-image-to-prompt';
 import { createOpenAIPromptMerge as createOpenAIPromptMergeDefault } from './openai-prompt-merge';
 
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
-const DEFAULT_OPENAI_TEXT_MODEL = 'gpt-4.1-mini';
 const DEFAULT_OPENAI_IMAGE_MODEL = 'gpt-image-1';
 const DEFAULT_GEMINI_HTTP_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_GEMINI_HTTP_IMAGE_MODEL = 'gemini-3-pro-image-preview';
+const DEFAULT_SUXI_BASE_URL = 'https://new.suxi.ai/v1';
+const DEFAULT_SUXI_VISION_MODEL = 'gpt-4o-mini';
+const DEFAULT_SUXI_TEXT_MODEL = 'deepseek-v3';
 
-type ProviderName = 'gemini' | 'openai' | 'gemini_http';
+type GenerateProviderName = 'gemini' | 'openai' | 'gemini_http';
+type TextProviderName = 'suxi';
 type EnvLike = Record<string, string | undefined>;
 type GeminiHttpAuthMode = 'api_key' | 'bearer';
 
@@ -29,9 +30,7 @@ type MergePromptFn = (input: MergePromptInput) => Promise<string>;
 
 type AiProviderDeps = {
   makeGeminiClient?: (apiKey: string) => unknown;
-  createGeminiImageToPrompt?: (client: unknown) => AnalyzeImageFn;
   createGeminiImageGenerator?: (client: unknown) => GenerateFromModelFn;
-  createGeminiPromptMerge?: (client: unknown) => MergePromptFn;
   createGeminiHttpImageGenerator?: (input: {
     apiKey: string;
     baseUrl: string;
@@ -44,15 +43,15 @@ type AiProviderDeps = {
 };
 
 export type AiServices = {
-  analyzeProvider: ProviderName;
-  generateProvider: ProviderName;
-  mergeProvider: Exclude<ProviderName, 'gemini_http'>;
+  analyzeProvider: TextProviderName;
+  generateProvider: GenerateProviderName;
+  mergeProvider: TextProviderName;
   analyzeImage: AnalyzeImageFn;
   generateFromModel: GenerateFromModelFn;
   mergePrompt: MergePromptFn;
 };
 
-function normalizeProvider(raw: string | undefined): ProviderName {
+function normalizeGenerateProvider(raw: string | undefined): GenerateProviderName {
   const value = String(raw || 'gemini').trim().toLowerCase();
   if (value === 'gemini_http') {
     return 'gemini_http';
@@ -67,25 +66,29 @@ function normalizeProvider(raw: string | undefined): ProviderName {
 }
 
 export function createAiServicesFromEnv(env: EnvLike, deps: AiProviderDeps = {}): AiServices {
-  const defaultProvider = normalizeProvider(env.AI_PROVIDER);
-  const analyzeProvider = normalizeProvider(env.IMAGE_TO_PROMPT_PROVIDER || defaultProvider);
-  const generateProvider = normalizeProvider(env.IMAGE_GENERATION_PROVIDER || defaultProvider);
-  const mergeProvider = normalizeProvider(env.PROMPT_MERGE_PROVIDER || analyzeProvider);
+  const defaultGenerateProvider = normalizeGenerateProvider(env.AI_PROVIDER);
+  const generateProvider = normalizeGenerateProvider(env.IMAGE_GENERATION_PROVIDER || defaultGenerateProvider);
+  const analyzeProvider: TextProviderName = 'suxi';
+  const mergeProvider: TextProviderName = 'suxi';
 
-  if (analyzeProvider === 'gemini_http' || mergeProvider === 'gemini_http') {
-    throw new Error('IMAGE_TO_PROMPT_PROVIDER and PROMPT_MERGE_PROVIDER do not support gemini_http');
+  const suxiApiKey = String(env.SUXI_API_KEY || '').trim();
+  if (!suxiApiKey) {
+    throw new Error('SUXI_API_KEY is required for text capabilities');
   }
+  const suxiBaseUrl = String(env.SUXI_BASE_URL || DEFAULT_SUXI_BASE_URL).trim();
+  const suxiVisionModel = String(env.SUXI_VISION_MODEL || DEFAULT_SUXI_VISION_MODEL).trim();
+  const suxiTextModel = String(env.SUXI_TEXT_MODEL || DEFAULT_SUXI_TEXT_MODEL).trim();
 
   const geminiApiKey = String(env.GEMINI_API_KEY || '').trim();
-  const needGemini = analyzeProvider === 'gemini' || generateProvider === 'gemini' || mergeProvider === 'gemini';
+  const needGemini = generateProvider === 'gemini';
   if (needGemini && !geminiApiKey) {
-    throw new Error('GEMINI_API_KEY is required when any provider is gemini');
+    throw new Error('GEMINI_API_KEY is required when image generation provider is gemini');
   }
 
   const openaiApiKey = String(env.OPENAI_API_KEY || '').trim();
-  const needOpenai = analyzeProvider === 'openai' || generateProvider === 'openai' || mergeProvider === 'openai';
+  const needOpenai = generateProvider === 'openai';
   if (needOpenai && !openaiApiKey) {
-    throw new Error('OPENAI_API_KEY is required when any provider is openai');
+    throw new Error('OPENAI_API_KEY is required when image generation provider is openai');
   }
 
   const needGeminiHttp = generateProvider === 'gemini_http';
@@ -94,9 +97,8 @@ export function createAiServicesFromEnv(env: EnvLike, deps: AiProviderDeps = {})
     throw new Error('GEMINI_HTTP_API_KEY or GEMINI_API_KEY is required when provider is gemini_http');
   }
 
-  const baseUrl = String(env.OPENAI_BASE_URL || DEFAULT_OPENAI_BASE_URL).trim();
-  const textModel = String(env.OPENAI_TEXT_MODEL || DEFAULT_OPENAI_TEXT_MODEL).trim();
-  const imageModel = String(env.OPENAI_IMAGE_MODEL || DEFAULT_OPENAI_IMAGE_MODEL).trim();
+  const openaiBaseUrl = String(env.OPENAI_BASE_URL || DEFAULT_OPENAI_BASE_URL).trim();
+  const openaiImageModel = String(env.OPENAI_IMAGE_MODEL || DEFAULT_OPENAI_IMAGE_MODEL).trim();
   const geminiHttpBaseUrl = String(env.GEMINI_HTTP_BASE_URL || DEFAULT_GEMINI_HTTP_BASE_URL).trim();
   const geminiHttpImageModel = String(env.GEMINI_HTTP_IMAGE_MODEL || DEFAULT_GEMINI_HTTP_IMAGE_MODEL).trim();
   const geminiHttpAuthMode = (String(env.GEMINI_HTTP_AUTH_MODE || '').trim().toLowerCase() ||
@@ -114,22 +116,17 @@ export function createAiServicesFromEnv(env: EnvLike, deps: AiProviderDeps = {})
     return geminiClient;
   };
 
-  const createGeminiImageToPrompt = deps.createGeminiImageToPrompt ?? createGeminiImageToPromptDefault;
   const createGeminiImageGenerator = deps.createGeminiImageGenerator ?? createGeminiImageGeneratorDefault;
-  const createGeminiPromptMerge = deps.createGeminiPromptMerge ?? createGeminiPromptMergeDefault;
   const createGeminiHttpImageGenerator = deps.createGeminiHttpImageGenerator ?? createGeminiHttpImageGeneratorDefault;
   const createOpenAIImageToPrompt = deps.createOpenAIImageToPrompt ?? createOpenAIImageToPromptDefault;
   const createOpenAIImageGenerator = deps.createOpenAIImageGenerator ?? createOpenAIImageGeneratorDefault;
   const createOpenAIPromptMerge = deps.createOpenAIPromptMerge ?? createOpenAIPromptMergeDefault;
 
-  const analyzeImage =
-    analyzeProvider === 'gemini'
-      ? createGeminiImageToPrompt(getGeminiClient())
-      : createOpenAIImageToPrompt({
-          apiKey: openaiApiKey,
-          baseUrl,
-          model: textModel,
-        });
+  const analyzeImage = createOpenAIImageToPrompt({
+    apiKey: suxiApiKey,
+    baseUrl: suxiBaseUrl,
+    model: suxiVisionModel,
+  });
 
   const generateFromModel =
     generateProvider === 'gemini'
@@ -137,8 +134,8 @@ export function createAiServicesFromEnv(env: EnvLike, deps: AiProviderDeps = {})
       : generateProvider === 'openai'
         ? createOpenAIImageGenerator({
             apiKey: openaiApiKey,
-            baseUrl,
-            model: imageModel,
+            baseUrl: openaiBaseUrl,
+            model: openaiImageModel,
           })
         : createGeminiHttpImageGenerator({
             apiKey: geminiHttpApiKey,
@@ -147,14 +144,11 @@ export function createAiServicesFromEnv(env: EnvLike, deps: AiProviderDeps = {})
             authMode: geminiHttpAuthMode,
           });
 
-  const mergePrompt =
-    mergeProvider === 'gemini'
-      ? createGeminiPromptMerge(getGeminiClient())
-      : createOpenAIPromptMerge({
-          apiKey: openaiApiKey,
-          baseUrl,
-          model: textModel,
-        });
+  const mergePrompt = createOpenAIPromptMerge({
+    apiKey: suxiApiKey,
+    baseUrl: suxiBaseUrl,
+    model: suxiTextModel,
+  });
 
   return {
     analyzeProvider,
