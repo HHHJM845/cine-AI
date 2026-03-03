@@ -2,6 +2,9 @@ export type GenerateImagesRequest = {
   prompt: string;
   aspectRatio: '16:9' | '9:16';
   count: 1 | 2 | 3 | 4;
+  enableSceneAssist: boolean;
+  primarySceneId?: string;
+  subSceneId?: string;
 };
 
 export type GenerationItem = {

@@ -173,6 +173,9 @@ type QueueJob = {
   prompt: string;
   aspectRatio: GenerateImagesRequest['aspectRatio'];
   count: GenerateImagesRequest['count'];
+  enableSceneAssist: boolean;
+  primarySceneId: string;
+  subSceneId: string;
   createdAt: number;
   status: 'queued' | 'running';
 };
@@ -287,6 +290,7 @@ export default function App() {
   const [activeMenu, setActiveMenu] = useState('explore');
   const [scene, setScene] = useState('poster');
   const [subScene, setSubScene] = useState('movie_poster');
+  const [enableSceneAssist, setEnableSceneAssist] = useState(true);
   const [aspectRatio, setAspectRatio] = useState<GenerateImagesRequest['aspectRatio']>('16:9');
   const [prompt, setPrompt] = useState('');
   const [previewType, setPreviewType] = useState('image');
@@ -459,6 +463,9 @@ export default function App() {
         prompt: job.prompt,
         aspectRatio: job.aspectRatio,
         count: job.count,
+        enableSceneAssist: job.enableSceneAssist,
+        primarySceneId: job.primarySceneId,
+        subSceneId: job.subSceneId,
       });
       const completedJob = applyBatchToJob(runningJob, nextBatch);
       const completedBatch = toUiBatchFromJob(completedJob);
@@ -555,6 +562,9 @@ export default function App() {
       prompt: normalizedPrompt,
       aspectRatio: nextAspectRatio,
       count: nextCount,
+      enableSceneAssist,
+      primarySceneId: scene,
+      subSceneId: subScene,
       createdAt,
       status: 'queued',
     };
@@ -784,7 +794,7 @@ export default function App() {
             </div>
 
             {/* Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6">
               {filteredExploreImages.map((img, index) => (
                 <div 
                   key={img.id} 
@@ -983,6 +993,21 @@ export default function App() {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              <div className="mb-8">
+                <label className="text-xs text-white/40 uppercase tracking-widest mb-3 block">场景辅助优化提示词</label>
+                <button
+                  onClick={() => setEnableSceneAssist((prev) => !prev)}
+                  className={`w-full flex items-center justify-between px-4 py-3 rounded-lg border text-sm transition-all duration-300 ${
+                    enableSceneAssist
+                      ? 'border-[#00FFFF]/50 text-[#00FFFF] bg-[#00FFFF]/5'
+                      : 'border-white/10 text-white/60 hover:border-white/30 hover:text-white'
+                  }`}
+                >
+                  <span>{enableSceneAssist ? '已开启' : '已关闭'}</span>
+                  <span className="text-xs text-white/50">{enableSceneAssist ? `${selectedPrimaryScene.label} / ${selectedSecondaryScene.label}` : '仅使用用户提示词'}</span>
+                </button>
               </div>
 
               {/* Image Upload / Reverse Prompt */}
