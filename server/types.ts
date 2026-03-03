@@ -11,6 +11,9 @@ export type GenerateImagesInput = {
   prompt: string;
   aspectRatio: AspectRatio;
   count: 1 | 2 | 3 | 4;
+  enableSceneAssist?: boolean;
+  primarySceneId?: string;
+  subSceneId?: string;
 };
 
 export type GeneratedImageBinary = {

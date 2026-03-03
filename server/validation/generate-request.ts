@@ -6,6 +6,9 @@ type GenerateRequestLike = {
   prompt?: unknown;
   aspectRatio?: unknown;
   count?: unknown;
+  enableSceneAssist?: unknown;
+  primarySceneId?: unknown;
+  subSceneId?: unknown;
 };
 
 export function validateGenerateRequest(input: GenerateRequestLike): string | null {
@@ -20,6 +23,18 @@ export function validateGenerateRequest(input: GenerateRequestLike): string | nu
 
   if (typeof input.aspectRatio !== 'string' || !ALLOWED_ASPECT_RATIOS.has(input.aspectRatio as AspectRatio)) {
     return 'invalid aspect ratio';
+  }
+
+  if (typeof input.enableSceneAssist !== 'boolean') {
+    return 'enableSceneAssist must be boolean';
+  }
+
+  if (input.enableSceneAssist) {
+    const primarySceneId = typeof input.primarySceneId === 'string' ? input.primarySceneId.trim() : '';
+    const subSceneId = typeof input.subSceneId === 'string' ? input.subSceneId.trim() : '';
+    if (!primarySceneId || !subSceneId) {
+      return 'primarySceneId and subSceneId are required when scene assist is enabled';
+    }
   }
 
   return null;
