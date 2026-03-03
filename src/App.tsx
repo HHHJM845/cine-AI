@@ -1369,10 +1369,11 @@ export default function App() {
               {sortedAssets.map((img) => (
                 <div 
                   key={img.id} 
-                  className={`relative group rounded-md overflow-hidden bg-[#121212] border cursor-pointer transition-all duration-300 ${viewMode === 'grid' ? 'aspect-video' : 'flex h-16 items-center p-2 gap-4'} ${selectedAssets.has(img.id) ? 'border-[#00FFFF] shadow-[0_0_10px_rgba(0,255,255,0.2)]' : 'border-white/5 hover:border-white/20'}`}
+                  className={`relative group rounded-md overflow-hidden bg-[#121212] border cursor-pointer transition-all duration-300 ${viewMode === 'grid' ? 'w-full' : 'flex h-16 items-center p-2 gap-4'} ${selectedAssets.has(img.id) ? 'border-[#00FFFF] shadow-[0_0_10px_rgba(0,255,255,0.2)]' : 'border-white/5 hover:border-white/20'}`}
                   onClick={() => handleAssetClick(img)}
                 >
-                  <img src={img.url} alt="Asset" className={`${viewMode === 'grid' ? 'w-full h-full object-cover' : 'w-20 h-12 object-cover rounded'} opacity-80 group-hover:opacity-100 transition-all duration-300`} />
+                  {viewMode === 'grid' && <div className="w-full pt-[100%]" />}
+                  <img src={img.url} alt="Asset" className={`${viewMode === 'grid' ? 'absolute inset-0 w-full h-full object-cover' : 'w-20 h-12 object-cover rounded'} opacity-80 group-hover:opacity-100 transition-all duration-300`} />
                   {viewMode === 'grid' && <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />}
 
                   <button
