@@ -63,4 +63,16 @@ describe('createScenePromptLoader', () => {
 
     expect(output.presetPrompt).toBeNull();
   });
+
+  it('loads built-in movie poster prompt file from repository prompts directory', async () => {
+    const loadScenePrompt = createScenePromptLoader({
+      baseDir: path.resolve('server/prompts'),
+    });
+    const output = await loadScenePrompt({
+      primarySceneId: 'poster',
+      subSceneId: 'movie_poster',
+    });
+
+    expect(output.presetPrompt).toBeTruthy();
+  });
 });
