@@ -1,0 +1,98 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createDb } from '../db/client';
+import { createGenerationRepository } from '../repositories/generation-repository';
+
+let dbPath = '';
+
+afterEach(() => {
+  if (dbPath) {
+    try {
+      fs.rmSync(dbPath, { force: true });
+      fs.rmSync(`${dbPath}-wal`, { force: true });
+      fs.rmSync(`${dbPath}-shm`, { force: true });
+    } catch {
+      // ignore cleanup errors in tests
+    }
+  }
+});
+
+describe('generation repository', () => {
+  it('persists and queries batch with items', () => {
+    dbPath = path.join(os.tmpdir(), `cine-${Date.now()}.db`);
+    const db = createDb(dbPath);
+    const repo = createGenerationRepository(db);
+
+    repo.insertBatch({
+      id: 'batch_1',
+      prompt: 'x',
+      aspectRatio: '16:9',
+      requestedCount: 2,
+      model: 'gemini-3-pro-image-preview',
+      status: 'partial_failed',
+      createdAt: 1,
+    });
+
+    repo.insertItem({
+      id: 'item_1',
+      batchId: 'batch_1',
+      position: 1,
+      status: 'success',
+      imagePath: '2026/03/02/a.png',
+      errorMessage: null,
+      createdAt: 1,
+    });
+    repo.insertItem({
+      id: 'item_2',
+      batchId: 'batch_1',
+      position: 2,
+      status: 'failed',
+      imagePath: null,
+      errorMessage: 'model returned no image',
+      createdAt: 1,
+    });
+
+    const output = repo.listBatches({ limit: 20 });
+
+    expect(output).toHaveLength(1);
+    expect(output[0].items).toHaveLength(2);
+    expect(output[0].items[0].imageUrl).toBe('/generated/2026/03/02/a.png');
+    db.close();
+  });
+
+  it('removes items and prunes empty batches', () => {
+    dbPath = path.join(os.tmpdir(), `cine-${Date.now()}-remove.db`);
+    const db = createDb(dbPath);
+    const repo = createGenerationRepository(db);
+
+    repo.insertBatch({
+      id: 'batch_1',
+      prompt: 'x',
+      aspectRatio: '16:9',
+      requestedCount: 1,
+      model: 'gemini-3-pro-image-preview',
+      status: 'completed',
+      createdAt: 1,
+    });
+    repo.insertItem({
+      id: 'item_1',
+      batchId: 'batch_1',
+      position: 1,
+      status: 'success',
+      imagePath: '2026/03/03/remove-me.png',
+      errorMessage: null,
+      createdAt: 1,
+    });
+
+    const result = repo.removeItems(['item_1']);
+
+    expect(result.deletedItemIds).toEqual(['item_1']);
+    expect(result.imagePaths).toEqual(['2026/03/03/remove-me.png']);
+    expect(result.deletedBatchIds).toEqual(['batch_1']);
+    expect(result.failedItemIds).toEqual([]);
+    expect(repo.listBatches({ limit: 20 })).toHaveLength(0);
+    db.close();
+  });
+});

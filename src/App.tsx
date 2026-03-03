@@ -1,7 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Compass, Wand2, FolderOpen, Image as ImageIcon, Video, Box, Upload, Download, ArrowLeft, Sparkles, Search, ChevronDown, CheckSquare, ListFilter, LayoutGrid, List, CheckCircle2, Circle, Trash2, Heart, Check, Edit, RefreshCw, MoreHorizontal } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { imageToPrompt } from './services/image-to-prompt';
+import { fetchGenerationBatches } from './services/generation-batches';
+import { generateImages, type GenerationBatch, type GenerateImagesRequest } from './services/generate-images';
+import { buildDownloadFileName, downloadImage, downloadImages } from './services/image-download';
+import { deleteGenerationAssets } from './services/delete-generation-assets';
+import { SUPPORTED_ASPECT_RATIOS, toAspectRatio } from './utils/aspect-ratios';
+import { toAssetItemsFromBatches } from './features/assets/asset-items';
+import { EXPLORE_IMAGES as EXPLORE_IMAGES_LIBRARY } from './data/explore-images';
 
 const MOCK_IMAGES = [
   { id: 1, url: 'https://picsum.photos/seed/cine1/800/1200', prompt: 'A cinematic shot of a futuristic city...', ratio: '2.39:1', model: 'CineVision v2.4', seed: '84729103' },
@@ -25,7 +32,7 @@ const MOCK_IMAGES = [
 const INITIAL_GENERATION_BATCHES = [
   {
     id: 'batch_1',
-    prompt: '第一人称视角，镜头前清晰可见一双戴着浅色医用橡胶手套的双手，正紧紧握住病床两侧冰冷的金属扶手，视角微微低头俯视。病床上躺着一名沉睡的病人，剃光的头部有一道巨大的缝合伤疤，伤口呈规则缝合线形态，肤色苍白但胸口有极其微弱的呼吸起伏。场景位于夜晚阴森的医院病房内，天花板...',
+    prompt: '第一人称视角，镜头前可见戴着浅色医用手套的双手，正紧握病床两侧冰冷扶手。病床上躺着沉睡病人，头部有明显缝合伤痕，环境是夜晚阴森的医院病房。',
     model: '图片5.0 Lite',
     ratio: '16:9',
     resolution: '2K',
@@ -108,6 +115,51 @@ const ASSET_IMAGES = [
   }))
 ];
 
+function toGenerateCount(value: number): GenerateImagesRequest['count'] | null {
+  if (value === 1 || value === 2 || value === 3 || value === 4) {
+    return value;
+  }
+  return null;
+}
+
+type UiBatchImage = {
+  id: string;
+  url?: string;
+  status: 'success' | 'failed';
+  errorMessage?: string;
+};
+
+type UiBatch = {
+  id: string;
+  prompt: string;
+  model: string;
+  ratio: string;
+  createdAt: number;
+  resolution: string;
+  requestedCount: 1 | 2 | 3 | 4;
+  status: 'completed' | 'partial_failed' | 'failed';
+  images: UiBatchImage[];
+};
+
+function toUiBatch(batch: GenerationBatch): UiBatch {
+  return {
+    id: batch.id,
+    prompt: batch.prompt,
+    model: batch.model,
+    ratio: batch.aspectRatio,
+    createdAt: batch.createdAt,
+    resolution: `${batch.requestedCount} image(s)`,
+    requestedCount: batch.requestedCount as 1 | 2 | 3 | 4,
+    status: batch.status,
+    images: batch.items.map((item) => ({
+      id: item.id,
+      url: item.imageUrl,
+      status: item.status,
+      errorMessage: item.errorMessage,
+    })),
+  };
+}
+
 const SCENE_OPTIONS = [
   {
     id: 'poster',
@@ -117,8 +169,8 @@ const SCENE_OPTIONS = [
     subScenes: [
       { id: 'movie_poster', label: '院线电影主海报', desc: '高精度、大画幅的院线级海报' },
       { id: 'web_drama', label: '网播剧宣传海报（单人/群像）', desc: '适合网络传播的剧集海报' },
-      { id: 'variety_show', label: '综艺/纪录片概念海报', desc: '创意概念与视觉传达' }
-    ]
+      { id: 'variety_show', label: '综艺/纪录片概念海报', desc: '创意概念与视觉传达' },
+    ],
   },
   {
     id: 'ip',
@@ -128,8 +180,8 @@ const SCENE_OPTIONS = [
     subScenes: [
       { id: 'fan_art', label: '热门影视IP角色同人形象', desc: '基于现有影视角色的二次创作' },
       { id: 'novel_ip', label: '未影视化小说IP角色具象化', desc: '根据文字描述生成角色形象' },
-      { id: 'anime_to_real', label: '动漫IP角色真人风转绘', desc: '二次元角色转换为真人风格' }
-    ]
+      { id: 'anime_to_real', label: '动漫IP角色真人风转绘', desc: '二次元角色转换为真人风格' },
+    ],
   },
   {
     id: 'scene',
@@ -139,8 +191,8 @@ const SCENE_OPTIONS = [
     subScenes: [
       { id: 'scifi', label: '科幻/奇幻片世界观场景搭建', desc: '充满想象力的异世界或未来场景' },
       { id: 'historical', label: '古装剧历史还原场景绘制', desc: '考究的历史建筑与环境氛围' },
-      { id: 'modern', label: '现代剧生活化场景优化', desc: '真实的现代生活场景与光影' }
-    ]
+      { id: 'modern', label: '现代剧生活化场景优化', desc: '真实的现代生活场景与光影' },
+    ],
   },
   {
     id: 'short_video',
@@ -150,8 +202,8 @@ const SCENE_OPTIONS = [
     subScenes: [
       { id: 'storyboard', label: '剧情高光时刻分镜图', desc: '捕捉影视剧中最具张力的瞬间' },
       { id: 'relationship', label: '角色人物关系图', desc: '清晰展现角色间的复杂关系' },
-      { id: 'cover', label: '宣发短视频封面图', desc: '高点击率的短视频封面设计' }
-    ]
+      { id: 'cover', label: '宣发短视频封面图', desc: '高点击率的短视频封面设计' },
+    ],
   },
   {
     id: 'merch',
@@ -161,16 +213,16 @@ const SCENE_OPTIONS = [
     subScenes: [
       { id: 'emoji', label: '角色Q版表情包', desc: '可爱生动的角色Q版形象' },
       { id: 'product', label: '周边产品图案（手办/文具/服饰）', desc: '适用于各类衍生品的图案设计' },
-      { id: 'offline', label: '线下主题展打卡点素材', desc: '沉浸式线下展览的视觉物料' }
-    ]
-  }
+      { id: 'offline', label: '线下主题展打卡点素材', desc: '沉浸式线下展览的视觉物料' },
+    ],
+  },
 ];
 
 export default function App() {
   const [activeMenu, setActiveMenu] = useState('explore');
   const [scene, setScene] = useState('poster');
   const [subScene, setSubScene] = useState('movie_poster');
-  const [aspectRatio, setAspectRatio] = useState('2.39:1');
+  const [aspectRatio, setAspectRatio] = useState<GenerateImagesRequest['aspectRatio']>('16:9');
   const [prompt, setPrompt] = useState('');
   const [previewType, setPreviewType] = useState('image');
   const [selectedImage, setSelectedImage] = useState<any>(null);
@@ -178,23 +230,27 @@ export default function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [generateCount, setGenerateCount] = useState<1 | 2 | 3 | 4>(1);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isLoadingBatches, setIsLoadingBatches] = useState(false);
+  const [generationError, setGenerationError] = useState('');
+  const [downloadMessage, setDownloadMessage] = useState('');
   const uploadAbortRef = useRef<AbortController | null>(null);
   const latestUploadSeqRef = useRef(0);
   
   // Generation Batches State
-  const [generationBatches, setGenerationBatches] = useState(INITIAL_GENERATION_BATCHES);
+  const [generationBatches, setGenerationBatches] = useState<UiBatch[]>([]);
   const [openBatchMenu, setOpenBatchMenu] = useState<string | null>(null);
 
   // Assets View State
   const [isBatchMode, setIsBatchMode] = useState(false);
-  const [selectedAssets, setSelectedAssets] = useState<Set<number>>(new Set());
+  const [selectedAssets, setSelectedAssets] = useState<Set<string>>(new Set());
+  const [assetSearchQuery, setAssetSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-  const [favorites, setFavorites] = useState<Set<number>>(new Set());
+  const [favorites, setFavorites] = useState<Set<number | string>>(new Set());
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
-  const [selectedFolder, setSelectedFolder] = useState<'all' | 'project_a' | 'project_b'>('all');
-  const [isFolderDropdownOpen, setIsFolderDropdownOpen] = useState(false);
   const [isDateDropdownOpen, setIsDateDropdownOpen] = useState(false);
   const [isPrimaryDropdownOpen, setIsPrimaryDropdownOpen] = useState(false);
   const [isSecondaryDropdownOpen, setIsSecondaryDropdownOpen] = useState(false);
@@ -203,7 +259,7 @@ export default function App() {
   const secondaryOptions = selectedPrimaryScene.subScenes;
   const selectedSecondaryScene = secondaryOptions.find(s => s.id === subScene) || secondaryOptions[0];
 
-  const toggleFavorite = (e: React.MouseEvent, id: number) => {
+  const toggleFavorite = (e: React.MouseEvent, id: number | string) => {
     e.stopPropagation();
     setFavorites(prev => {
       const newFavs = new Set(prev);
@@ -216,6 +272,39 @@ export default function App() {
   useEffect(() => {
     return () => {
       uploadAbortRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!downloadMessage) {
+      return;
+    }
+    const timer = setTimeout(() => setDownloadMessage(''), 4000);
+    return () => clearTimeout(timer);
+  }, [downloadMessage]);
+
+  useEffect(() => {
+    let active = true;
+    setIsLoadingBatches(true);
+    setGenerationError('');
+
+    fetchGenerationBatches()
+      .then((batches) => {
+        if (!active) return;
+        setGenerationBatches(batches.map(toUiBatch));
+      })
+      .catch((error) => {
+        if (!active) return;
+        const message = error instanceof Error ? error.message : '加载批次失败';
+        setGenerationError(message);
+      })
+      .finally(() => {
+        if (!active) return;
+        setIsLoadingBatches(false);
+      });
+
+    return () => {
+      active = false;
     };
   }, []);
 
@@ -257,15 +346,68 @@ export default function App() {
     e.target.value = '';
   };
 
-  const handleReEdit = (batch: any) => {
+  const handleReEdit = (batch: UiBatch) => {
+    const nextAspectRatio = toAspectRatio(batch.ratio);
+    const nextCount = toGenerateCount(batch.requestedCount);
     setPrompt(batch.prompt);
-    setAspectRatio(batch.ratio);
+    if (nextAspectRatio) {
+      setAspectRatio(nextAspectRatio);
+    }
+    if (nextCount) {
+      setGenerateCount(nextCount);
+    }
   };
 
-  const handleRegenerate = (batch: any) => {
-    setPrompt(batch.prompt);
-    setAspectRatio(batch.ratio);
-    // In a real app, this would also trigger the generation process
+  const runGeneration = async (input: { prompt: string; aspectRatio: string; count: number }) => {
+    if (isGenerating) {
+      return;
+    }
+
+    const normalizedPrompt = input.prompt.trim();
+    if (!normalizedPrompt) {
+      setGenerationError('提示词不能为空');
+      return;
+    }
+
+    const nextAspectRatio = toAspectRatio(input.aspectRatio) ?? toAspectRatio(aspectRatio);
+    if (!nextAspectRatio) {
+      setGenerationError('画面比例无效');
+      return;
+    }
+
+    const nextCount = toGenerateCount(input.count) ?? toGenerateCount(generateCount);
+    if (!nextCount) {
+      setGenerationError('生成数量必须在 1 到 4 之间');
+      return;
+    }
+
+    setPrompt(normalizedPrompt);
+    setAspectRatio(nextAspectRatio);
+    setGenerateCount(nextCount);
+    setIsGenerating(true);
+    setGenerationError('');
+
+    try {
+      const nextBatch = await generateImages({
+        prompt: normalizedPrompt,
+        aspectRatio: nextAspectRatio,
+        count: nextCount,
+      });
+      setGenerationBatches((prev) => [toUiBatch(nextBatch), ...prev]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '生成失败，请稍后重试';
+      setGenerationError(message);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleRegenerate = async (batch: UiBatch) => {
+    await runGeneration({
+      prompt: batch.prompt,
+      aspectRatio: batch.ratio,
+      count: batch.requestedCount,
+    });
   };
 
   const handleDeleteBatch = (batchId: string) => {
@@ -273,33 +415,47 @@ export default function App() {
     setOpenBatchMenu(null);
   };
 
+  const handleGenerate = async () => {
+    await runGeneration({
+      prompt,
+      aspectRatio,
+      count: generateCount,
+    });
+  };
+
+  const assetItems = useMemo(() => toAssetItemsFromBatches(generationBatches), [generationBatches]);
+
   const sortedAssets = useMemo(() => {
-    let result = [...ASSET_IMAGES];
-    
+    let result = [...assetItems];
+
     if (showFavoritesOnly) {
-      result = result.filter(img => favorites.has(img.id));
+      result = result.filter((img) => favorites.has(img.id));
     }
-    
-    if (selectedFolder !== 'all') {
-      result = result.filter(img => img.folder === selectedFolder);
+
+    const normalizedAssetQuery = assetSearchQuery.trim().toLowerCase();
+    if (normalizedAssetQuery) {
+      result = result.filter(
+        (img) =>
+          img.prompt.toLowerCase().includes(normalizedAssetQuery) ||
+          img.ratio.toLowerCase().includes(normalizedAssetQuery) ||
+          img.id.toLowerCase().includes(normalizedAssetQuery),
+      );
     }
-    
+
     if (dateFilter !== 'all') {
       const now = Date.now();
       const day = 24 * 60 * 60 * 1000;
       if (dateFilter === 'today') {
-        result = result.filter(img => now - img.timestamp < day);
+        result = result.filter((img) => now - img.timestamp < day);
       } else if (dateFilter === 'week') {
-        result = result.filter(img => now - img.timestamp < 7 * day);
+        result = result.filter((img) => now - img.timestamp < 7 * day);
       } else if (dateFilter === 'month') {
-        result = result.filter(img => now - img.timestamp < 30 * day);
+        result = result.filter((img) => now - img.timestamp < 30 * day);
       }
     }
-    
-    return result.sort((a, b) => {
-      return sortOrder === 'desc' ? b.timestamp - a.timestamp : a.timestamp - b.timestamp;
-    });
-  }, [sortOrder, showFavoritesOnly, selectedFolder, dateFilter, favorites]);
+
+    return result.sort((a, b) => (sortOrder === 'desc' ? b.timestamp - a.timestamp : a.timestamp - b.timestamp));
+  }, [assetItems, assetSearchQuery, sortOrder, showFavoritesOnly, dateFilter, favorites]);
 
   const handleAssetClick = (img: any) => {
     if (isBatchMode) {
@@ -313,13 +469,112 @@ export default function App() {
   };
 
   const filteredExploreImages = useMemo(() => {
-    if (!searchQuery.trim()) return EXPLORE_IMAGES;
+    if (!searchQuery.trim()) return EXPLORE_IMAGES_LIBRARY;
     const lowerQuery = searchQuery.toLowerCase();
-    return EXPLORE_IMAGES.filter(img => 
+    return EXPLORE_IMAGES_LIBRARY.filter(img => 
       img.prompt.toLowerCase().includes(lowerQuery) || 
       img.ratio.includes(lowerQuery)
     );
   }, [searchQuery]);
+
+  const getErrorMessage = (error: unknown) => {
+    return error instanceof Error ? error.message : 'unknown error';
+  };
+
+  const handleDownloadOne = async (url?: string, index = 1) => {
+    if (!url) {
+      setDownloadMessage('下载失败：图片地址不存在');
+      return;
+    }
+
+    const fileName = buildDownloadFileName({
+      prefix: 'cine',
+      timestamp: new Date(),
+      index,
+      sourceUrl: url,
+    });
+
+    try {
+      await downloadImage({ url, fileName });
+      setDownloadMessage(`下载成功：${fileName}`);
+    } catch (error) {
+      setDownloadMessage(`下载失败：${getErrorMessage(error)}`);
+    }
+  };
+
+  const handleDownloadSelectedAssets = async () => {
+    const selected = sortedAssets.filter((img) => selectedAssets.has(img.id));
+    if (selected.length === 0) {
+      setDownloadMessage('下载失败：请先选择素材');
+      return;
+    }
+
+    const now = new Date();
+    const result = await downloadImages(
+      selected.map((img, index) => ({
+        url: img.url,
+        fileName: buildDownloadFileName({
+          prefix: 'cine',
+          timestamp: now,
+          index: index + 1,
+          sourceUrl: img.url,
+        }),
+      })),
+    );
+
+    if (result.failedCount === 0) {
+      setDownloadMessage(`已下载 ${result.successCount} 张图片`);
+      return;
+    }
+
+    setDownloadMessage(`已下载 ${result.successCount} 张，失败 ${result.failedCount} 张`);
+  };
+
+  const handleDeleteAssets = async (itemIds: string[]) => {
+    if (itemIds.length === 0) {
+      setDownloadMessage('删除失败：请先选择素材');
+      return;
+    }
+
+    try {
+      const result = await deleteGenerationAssets(itemIds);
+      const deletedIdSet = new Set(result.deletedItemIds);
+
+      if (deletedIdSet.size > 0) {
+        setGenerationBatches((prev) =>
+          prev
+            .map((batch) => ({
+              ...batch,
+              images: batch.images.filter((img) => !deletedIdSet.has(img.id)),
+            }))
+            .filter((batch) => batch.images.length > 0),
+        );
+        setSelectedAssets((prev) => {
+          const next = new Set<string>();
+          prev.forEach((id) => {
+            if (!deletedIdSet.has(id)) {
+              next.add(id);
+            }
+          });
+          return next;
+        });
+        setSelectedImage((prev: any) => (prev && deletedIdSet.has(prev.id) ? null : prev));
+      }
+
+      if (result.failedItemIds.length === 0) {
+        setDownloadMessage(`已删除 ${result.deletedItemIds.length} 张图片`);
+        return;
+      }
+
+      setDownloadMessage(`已删除 ${result.deletedItemIds.length} 张，失败 ${result.failedItemIds.length} 张`);
+    } catch (error) {
+      setDownloadMessage(`删除失败：${getErrorMessage(error)}`);
+    }
+  };
+
+  const handleDeleteSelectedAssets = async () => {
+    await handleDeleteAssets(Array.from(selectedAssets));
+  };
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-[#080808] text-white font-sans">
@@ -336,6 +591,11 @@ export default function App() {
 
       {/* Main Content */}
       <main className="flex-1 flex overflow-hidden relative">
+        {downloadMessage && (
+          <div className={`absolute top-4 right-4 z-[60] px-4 py-2 text-xs rounded-lg border backdrop-blur-sm ${downloadMessage.startsWith('下载失败：') ? 'text-red-300 border-red-400/40 bg-red-500/10' : 'text-[#00FFFF] border-[#00FFFF]/40 bg-black/70'}`}>
+            {downloadMessage}
+          </div>
+        )}
         
         {/* EXPLORE VIEW */}
         {activeMenu === 'explore' && (
@@ -357,10 +617,11 @@ export default function App() {
 
             {/* Grid */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-              {filteredExploreImages.map((img) => (
+              {filteredExploreImages.map((img, index) => (
                 <div 
                   key={img.id} 
-                  className="relative group rounded-xl overflow-hidden bg-[#121212] border border-white/5 cursor-pointer aspect-[3/4]"
+                  className="relative group rounded-xl overflow-hidden bg-[#121212] border border-white/5 cursor-pointer"
+                  style={{ aspectRatio: img.ratio.replace(':', ' / ') }}
                   onClick={() => setSelectedImage(img)}
                 >
                   <img src={img.url} alt="Explore Asset" className="w-full h-full object-cover opacity-80 group-hover:opacity-100 group-hover:scale-105 transition-all duration-700" />
@@ -373,7 +634,10 @@ export default function App() {
                       <span className="text-[10px] font-mono text-[#00FFFF] bg-[#00FFFF]/10 px-2 py-1 rounded border border-[#00FFFF]/20">{img.ratio}</span>
                       <button 
                         className="bg-white/10 hover:bg-[#00FFFF]/20 border border-white/10 hover:border-[#00FFFF] p-1.5 rounded-md text-white/70 hover:text-[#00FFFF] transition-all duration-300"
-                        onClick={(e) => { e.stopPropagation(); /* download logic */ }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleDownloadOne(img.url, index + 1);
+                        }}
                       >
                         <Download size={14} />
                       </button>
@@ -525,14 +789,29 @@ export default function App() {
               {/* Aspect Ratio */}
               <div className="mb-8">
                 <label className="text-xs text-white/40 uppercase tracking-widest mb-3 block">画面比例</label>
-                <div className="grid grid-cols-5 gap-2">
-                  {['2.39:1', '16:9', '3:4', '9:16', '4:3'].map((ratio) => (
+                <div className="grid grid-cols-2 gap-2">
+                  {SUPPORTED_ASPECT_RATIOS.map((ratio) => (
                     <button
                       key={ratio}
                       onClick={() => setAspectRatio(ratio)}
                       className={`py-3 text-xs rounded-lg border transition-all duration-300 flex items-center justify-center ${aspectRatio === ratio ? 'border-[#00FFFF] text-[#00FFFF] bg-[#00FFFF]/5 shadow-[0_0_15px_rgba(0,255,255,0.3)]' : 'border-white/10 text-white/50 hover:border-white/30 hover:text-white'}`}
                     >
                       {ratio}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mb-8">
+                <label className="text-xs text-white/40 uppercase tracking-widest mb-3 block">生成数量</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {[1, 2, 3, 4].map((count) => (
+                    <button
+                      key={count}
+                      onClick={() => setGenerateCount(count as 1 | 2 | 3 | 4)}
+                      className={`py-3 text-xs rounded-lg border transition-all duration-300 ${generateCount === count ? 'border-[#00FFFF] text-[#00FFFF] bg-[#00FFFF]/5 shadow-[0_0_15px_rgba(0,255,255,0.3)]' : 'border-white/10 text-white/50 hover:border-white/30 hover:text-white'}`}
+                    >
+                      {count} 张
                     </button>
                   ))}
                 </div>
@@ -586,10 +865,18 @@ export default function App() {
                 </div>
               </div>
 
+              {generationError && (
+                <p className="text-xs text-red-400 mb-4">{generationError}</p>
+              )}
+
               {/* Generate Button */}
-              <button className="w-full py-4 mt-auto rounded-xl bg-white text-black font-medium tracking-wide hover:bg-[#00FFFF] hover:shadow-[0_0_20px_rgba(0,255,255,0.6)] transition-all duration-300 flex items-center justify-center gap-2">
+              <button
+                onClick={handleGenerate}
+                disabled={isGenerating}
+                className={`w-full py-4 mt-auto rounded-xl font-medium tracking-wide transition-all duration-300 flex items-center justify-center gap-2 ${isGenerating ? 'bg-white/30 text-black/60 cursor-not-allowed' : 'bg-white text-black hover:bg-[#00FFFF] hover:shadow-[0_0_20px_rgba(0,255,255,0.6)]'}`}
+              >
                 <Wand2 size={18} />
-                生成
+                {isGenerating ? '生成中...' : '生成'}
               </button>
             </section>
 
@@ -601,7 +888,7 @@ export default function App() {
                   {[
                     { id: 'image', icon: <ImageIcon size={16} />, label: '图片' },
                     { id: 'video', icon: <Video size={16} />, label: '视频' },
-                    { id: '3d', icon: <Box size={16} />, label: '三维' }
+                    { id: '3d', icon: <Box size={16} />, label: '3D' }
                   ].map((type) => (
                     <button
                       key={type.id}
@@ -617,6 +904,14 @@ export default function App() {
 
               {/* Batches */}
               <div className="flex-1 flex flex-col gap-8">
+                {isLoadingBatches && (
+                  <div className="text-sm text-white/40">加载历史批次中...</div>
+                )}
+
+                {!isLoadingBatches && generationBatches.length === 0 && (
+                  <div className="text-sm text-white/40">暂无生成记录，输入提示词后点击生成。</div>
+                )}
+
                 {generationBatches.map((batch) => (
                   <div key={batch.id} className="flex flex-col gap-3">
                     {/* Batch Header */}
@@ -627,38 +922,55 @@ export default function App() {
                         <span>|</span>
                         <span>{batch.ratio}</span>
                         <span>|</span>
-                        <span>{batch.resolution}</span>
+                        <span>{batch.status}</span>
                       </div>
                     </div>
 
                     {/* Batch Images */}
-                    <div className="grid grid-cols-4 gap-1">
-                      {batch.images.map((img) => (
-                        <div 
-                          key={img.id} 
-                          className="relative group overflow-hidden bg-[#121212] cursor-pointer aspect-video"
-                          onClick={() => setSelectedImage({ ...img, prompt: batch.prompt, ratio: batch.ratio, model: batch.model })}
-                        >
-                          <img src={img.url} alt="Generated" className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-all duration-300" />
-                          <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                          
-                          {/* Hover Actions */}
-                          <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-1 group-hover:translate-y-0">
-                            <button 
-                              className="bg-black/50 backdrop-blur-md p-1.5 rounded text-white/70 hover:text-[#00FFFF] transition-all duration-300"
-                              onClick={(e) => toggleFavorite(e, img.id)}
-                            >
-                              <Heart size={14} className={favorites.has(img.id) ? "fill-[#00FFFF] text-[#00FFFF]" : ""} />
-                            </button>
-                            <button 
-                              className="bg-black/50 backdrop-blur-md p-1.5 rounded text-white/70 hover:text-[#00FFFF] transition-all duration-300"
-                              onClick={(e) => { e.stopPropagation(); /* download logic */ }}
-                            >
-                              <Download size={14} />
-                            </button>
+                    <div className="columns-2 lg:columns-3 2xl:columns-4 gap-3">
+                      {batch.images.map((img, index) => {
+                        if (img.status === 'failed' || !img.url) {
+                          return (
+                            <div key={img.id} className="mb-3 break-inside-avoid">
+                              <div className="relative overflow-hidden bg-[#121212] border border-red-500/40 p-3 flex flex-col justify-center items-center text-center min-h-[120px]">
+                                <Circle className="text-red-400 mb-2" size={18} />
+                                <p className="text-xs text-red-300">生成失败</p>
+                                <p className="text-[10px] text-white/40 mt-1 line-clamp-2">{img.errorMessage || 'unknown error'}</p>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div
+                            key={img.id}
+                            className="relative group overflow-hidden bg-[#121212] cursor-pointer break-inside-avoid mb-3"
+                            onClick={() => setSelectedImage({ ...img, url: img.url, prompt: batch.prompt, ratio: batch.ratio, model: batch.model })}
+                          >
+                            <img src={img.url} alt="Generated" className="block w-full h-auto object-contain opacity-80 group-hover:opacity-100 transition-all duration-300" />
+                            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+
+                            {/* Hover Actions */}
+                            <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-1 group-hover:translate-y-0">
+                              <button
+                                className="bg-black/50 backdrop-blur-md p-1.5 rounded text-white/70 hover:text-[#00FFFF] transition-all duration-300"
+                                onClick={(e) => toggleFavorite(e, img.id)}
+                              >
+                                <Heart size={14} className={favorites.has(img.id) ? 'fill-[#00FFFF] text-[#00FFFF]' : ''} />
+                              </button>
+                              <button
+                                className="bg-black/50 backdrop-blur-md p-1.5 rounded text-white/70 hover:text-[#00FFFF] transition-all duration-300"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void handleDownloadOne(img.url, index + 1);
+                                }}
+                              >
+                                <Download size={14} />
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
 
                     {/* Batch Footer Actions */}
@@ -670,7 +982,7 @@ export default function App() {
                         <Edit size={16} /> 重新编辑
                       </button>
                       <button 
-                        onClick={() => handleRegenerate(batch)}
+                        onClick={() => { void handleRegenerate(batch); }}
                         className="flex items-center gap-2 px-4 py-2 bg-[#1a1a1a] hover:bg-[#222] rounded-lg text-sm text-white/80 transition-colors"
                       >
                         <RefreshCw size={16} /> 再次生成
@@ -722,6 +1034,8 @@ export default function App() {
                 <input
                   type="text"
                   placeholder="搜索"
+                  value={assetSearchQuery}
+                  onChange={(e) => setAssetSearchQuery(e.target.value)}
                   className="bg-white/5 border border-white/10 rounded-md py-1.5 pl-9 pr-4 text-xs text-white/90 placeholder-white/30 focus:outline-none focus:border-[#00FFFF]/50 focus:bg-[#00FFFF]/5 transition-all duration-300 w-48"
                 />
               </div>
@@ -730,28 +1044,9 @@ export default function App() {
             {/* Filter Bar */}
             <div className="flex items-center justify-between px-8 py-3 border-b border-white/5 bg-[#121212]/30">
               <div className="flex items-center gap-4 text-xs text-white/60">
-                <div className="relative">
-                  <button 
-                    onClick={() => setIsFolderDropdownOpen(!isFolderDropdownOpen)}
-                    className="flex items-center gap-1.5 hover:text-white transition-colors bg-white/5 px-2 py-1 rounded border border-white/5"
-                  >
-                    <FolderOpen size={14} />
-                    {selectedFolder === 'all' ? '全部文件夹' : selectedFolder === 'project_a' ? '项目 A' : '项目 B'}
-                    <ChevronDown size={12} />
-                  </button>
-                  {isFolderDropdownOpen && (
-                    <div className="absolute top-full left-0 mt-1 w-32 bg-[#121212] border border-white/10 rounded-md shadow-xl overflow-hidden z-20">
-                      {['all', 'project_a', 'project_b'].map(f => (
-                        <button 
-                          key={f}
-                          onClick={() => { setSelectedFolder(f as any); setIsFolderDropdownOpen(false); }}
-                          className={`w-full text-left px-3 py-2 hover:bg-white/5 transition-colors ${selectedFolder === f ? 'text-[#00FFFF]' : 'text-white/80'}`}
-                        >
-                          {f === 'all' ? '全部文件夹' : f === 'project_a' ? '项目 A' : '项目 B'}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                <div className="flex items-center gap-1.5 bg-white/5 px-2 py-1 rounded border border-white/5">
+                  <FolderOpen size={14} />
+                  全部文件夹
                 </div>
                 
                 <button className="flex items-center gap-1 hover:text-white transition-colors">
@@ -795,7 +1090,7 @@ export default function App() {
                     onChange={(e) => setShowFavoritesOnly(e.target.checked)}
                     className="accent-[#00FFFF] bg-transparent border-white/20 rounded-sm" 
                   />
-                  我收藏的
+                  我的收藏
                 </label>
               </div>
               <div className="flex items-center gap-4 text-xs text-white/60">
@@ -834,6 +1129,16 @@ export default function App() {
                 >
                   <img src={img.url} alt="Asset" className={`${viewMode === 'grid' ? 'w-full h-full object-cover' : 'w-20 h-12 object-cover rounded'} opacity-80 group-hover:opacity-100 transition-all duration-300`} />
                   {viewMode === 'grid' && <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />}
+
+                  <button
+                    className="absolute top-1.5 right-1.5 bg-black/50 backdrop-blur-md p-1.5 rounded text-white/70 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all duration-300"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleDeleteAssets([img.id]);
+                    }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
                   
                   {viewMode === 'list' && (
                     <div className="flex-1 flex justify-between items-center px-4">
@@ -866,10 +1171,19 @@ export default function App() {
                 >
                   <span className="text-sm text-white/80">已选择 <span className="text-[#00FFFF] font-bold">{selectedAssets.size}</span> 项</span>
                   <div className="w-px h-4 bg-white/10"></div>
-                  <button className="text-sm hover:text-[#00FFFF] transition-colors flex items-center gap-2">
+                  <button className="text-sm hover:text-[#00FFFF] transition-colors flex items-center gap-2"
+                    onClick={() => {
+                      void handleDownloadSelectedAssets();
+                    }}
+                  >
                     <Download size={16} /> 下载
                   </button>
-                  <button className="text-sm hover:text-red-400 transition-colors flex items-center gap-2 text-white/70">
+                  <button
+                    className="text-sm hover:text-red-400 transition-colors flex items-center gap-2 text-white/70"
+                    onClick={() => {
+                      void handleDeleteSelectedAssets();
+                    }}
+                  >
                     <Trash2 size={16} /> 删除
                   </button>
                 </motion.div>
@@ -940,7 +1254,12 @@ export default function App() {
                   </div>
 
                   <div className="pt-8 border-t border-white/5">
-                    <button className="w-full py-4 rounded-xl bg-[#00FFFF] text-black font-medium tracking-wide hover:bg-white hover:shadow-[0_0_20px_rgba(0,255,255,0.6)] transition-all duration-300 flex items-center justify-center gap-2">
+                    <button
+                      className="w-full py-4 rounded-xl bg-[#00FFFF] text-black font-medium tracking-wide hover:bg-white hover:shadow-[0_0_20px_rgba(0,255,255,0.6)] transition-all duration-300 flex items-center justify-center gap-2"
+                      onClick={() => {
+                        void handleDownloadOne(selectedImage.url);
+                      }}
+                    >
                       <Download size={18} />
                       下载素材
                     </button>
@@ -968,3 +1287,8 @@ function MenuButton({ icon, label, active, onClick }: { icon: React.ReactNode, l
     </button>
   );
 }
+
+
+
+
+
