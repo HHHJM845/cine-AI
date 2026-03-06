@@ -844,67 +844,11 @@ export default function App() {
     }));
   };
 
-  const handleToggleUpvote = (batch: UiBatch) => {
-    const draft = getBatchFeedbackDraft(batch);
-    const nextVote: GenerationBatchFeedbackVote = draft.vote === 'up' ? null : 'up';
-    setBatchFeedbackDraft(batch.id, {
-      vote: nextVote,
-      downvoteReasons: [],
-      comment: draft.comment,
-    });
-    setOpenDownvotePopoverBatchId((prev) => (prev === batch.id ? null : prev));
-  };
-
-  const handleOpenDownvotePopover = (batch: UiBatch) => {
-    const draft = getBatchFeedbackDraft(batch);
-    setBatchFeedbackDraft(batch.id, draft);
-    setOpenDownvotePopoverBatchId(batch.id);
-  };
-
-  const handleToggleDownvoteReason = (batch: UiBatch, reason: string) => {
-    const draft = getBatchFeedbackDraft(batch);
-    const reasonSet = new Set(draft.downvoteReasons);
-    if (reasonSet.has(reason)) {
-      reasonSet.delete(reason);
-    } else {
-      reasonSet.add(reason);
-    }
-    setBatchFeedbackDraft(batch.id, {
-      vote: draft.vote,
-      downvoteReasons: Array.from(reasonSet),
-      comment: draft.comment,
-    });
-  };
-
-  const handleConfirmDownvote = (batch: UiBatch) => {
-    const draft = getBatchFeedbackDraft(batch);
-    if (draft.downvoteReasons.length === 0) {
-      setFeedbackMessage('请选择至少一个点踩原因');
-      return;
-    }
-    setBatchFeedbackDraft(batch.id, {
-      vote: 'down',
-      downvoteReasons: draft.downvoteReasons,
-      comment: draft.comment,
-    });
-    setOpenDownvotePopoverBatchId(null);
-  };
-
-  const handleFeedbackCommentChange = (batch: UiBatch, comment: string) => {
-    const draft = getBatchFeedbackDraft(batch);
-    setBatchFeedbackDraft(batch.id, {
-      vote: draft.vote,
-      downvoteReasons: draft.downvoteReasons,
-      comment,
-    });
-  };
-
-  const handleSaveBatchFeedback = async (batch: UiBatch) => {
+  const persistBatchFeedback = async (batch: UiBatch, draft: BatchFeedbackDraft) => {
     if (batch.status === 'queued' || batch.status === 'running') {
       return;
     }
 
-    const draft = getBatchFeedbackDraft(batch);
     if (draft.comment.length > FEEDBACK_COMMENT_MAX_LENGTH) {
       setFeedbackMessage(`意见内容不能超过 ${FEEDBACK_COMMENT_MAX_LENGTH} 字`);
       return;
@@ -941,6 +885,56 @@ export default function App() {
     } finally {
       setSavingFeedbackBatchId(null);
     }
+  };
+
+  const handleToggleUpvote = (batch: UiBatch) => {
+    const draft = getBatchFeedbackDraft(batch);
+    const nextVote: GenerationBatchFeedbackVote = draft.vote === 'up' ? null : 'up';
+    const nextDraft: BatchFeedbackDraft = {
+      vote: nextVote,
+      downvoteReasons: [],
+      comment: draft.comment,
+    };
+    setBatchFeedbackDraft(batch.id, nextDraft);
+    setOpenDownvotePopoverBatchId((prev) => (prev === batch.id ? null : prev));
+    void persistBatchFeedback(batch, nextDraft);
+  };
+
+  const handleOpenDownvotePopover = (batch: UiBatch) => {
+    const draft = getBatchFeedbackDraft(batch);
+    setBatchFeedbackDraft(batch.id, draft);
+    setOpenDownvotePopoverBatchId(batch.id);
+  };
+
+  const handleToggleDownvoteReason = (batch: UiBatch, reason: string) => {
+    const draft = getBatchFeedbackDraft(batch);
+    const reasonSet = new Set(draft.downvoteReasons);
+    if (reasonSet.has(reason)) {
+      reasonSet.delete(reason);
+    } else {
+      reasonSet.add(reason);
+    }
+    setBatchFeedbackDraft(batch.id, {
+      vote: draft.vote,
+      downvoteReasons: Array.from(reasonSet),
+      comment: draft.comment,
+    });
+  };
+
+  const handleConfirmDownvote = (batch: UiBatch) => {
+    const draft = getBatchFeedbackDraft(batch);
+    if (draft.downvoteReasons.length === 0) {
+      setFeedbackMessage('请选择至少一个点踩原因');
+      return;
+    }
+    const nextDraft: BatchFeedbackDraft = {
+      vote: 'down',
+      downvoteReasons: draft.downvoteReasons,
+      comment: draft.comment,
+    };
+    setBatchFeedbackDraft(batch.id, nextDraft);
+    setOpenDownvotePopoverBatchId(null);
+    void persistBatchFeedback(batch, nextDraft);
   };
 
   return (
@@ -1315,7 +1309,6 @@ export default function App() {
                   const feedbackDraft = getBatchFeedbackDraft(batch);
                   const isBatchProcessing = batch.status === 'queued' || batch.status === 'running';
                   const isSavingFeedback = savingFeedbackBatchId === batch.id;
-                  const commentLength = feedbackDraft.comment.length;
 
                   return (
                   <div key={batch.id} className="flex flex-col gap-3">
@@ -1397,124 +1390,6 @@ export default function App() {
                       })}
                     </div>
 
-                    {/* Batch Feedback */}
-                    <div className="relative rounded-xl border border-white/10 bg-white/[0.02] p-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          disabled={isBatchProcessing || isSavingFeedback}
-                          onClick={() => handleToggleUpvote(batch)}
-                          className={`flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
-                            feedbackDraft.vote === 'up'
-                              ? 'border-[#00FFFF]/60 bg-[#00FFFF]/10 text-[#00FFFF]'
-                              : 'border-white/15 text-white/70 hover:border-white/30 hover:text-white'
-                          } ${isBatchProcessing || isSavingFeedback ? 'cursor-not-allowed opacity-40' : ''}`}
-                        >
-                          <ThumbsUp size={13} />
-                          点赞
-                        </button>
-                        <button
-                          disabled={isBatchProcessing || isSavingFeedback}
-                          onClick={() => handleOpenDownvotePopover(batch)}
-                          className={`flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
-                            feedbackDraft.vote === 'down'
-                              ? 'border-red-400/60 bg-red-500/10 text-red-300'
-                              : 'border-white/15 text-white/70 hover:border-white/30 hover:text-white'
-                          } ${isBatchProcessing || isSavingFeedback ? 'cursor-not-allowed opacity-40' : ''}`}
-                        >
-                          <ThumbsDown size={13} />
-                          点踩
-                        </button>
-                        {feedbackDraft.vote === 'down' && feedbackDraft.downvoteReasons.length > 0 && (
-                          <span className="text-[11px] text-red-300/90">已选 {feedbackDraft.downvoteReasons.length} 项点踩原因</span>
-                        )}
-                        <div className="ml-auto text-[10px] text-white/45">{commentLength}/{FEEDBACK_COMMENT_MAX_LENGTH}</div>
-                      </div>
-
-                      <textarea
-                        value={feedbackDraft.comment}
-                        disabled={isBatchProcessing || isSavingFeedback}
-                        onChange={(event) => handleFeedbackCommentChange(batch, event.target.value)}
-                        placeholder="补充意见（可选，最多 500 字）"
-                        className={`mt-2 min-h-[72px] w-full resize-y rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/85 placeholder-white/30 focus:outline-none focus:border-[#00FFFF]/40 ${
-                          isBatchProcessing || isSavingFeedback ? 'cursor-not-allowed opacity-40' : ''
-                        }`}
-                      />
-
-                      <div className="mt-2 flex items-center justify-end gap-2">
-                        <button
-                          disabled={isBatchProcessing || isSavingFeedback}
-                          onClick={() => {
-                            setBatchFeedbackDraft(batch.id, toFeedbackDraft(batch.feedback));
-                            setOpenDownvotePopoverBatchId((prev) => (prev === batch.id ? null : prev));
-                          }}
-                          className={`rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/70 transition-colors hover:border-white/30 hover:text-white ${
-                            isBatchProcessing || isSavingFeedback ? 'cursor-not-allowed opacity-40' : ''
-                          }`}
-                        >
-                          重置
-                        </button>
-                        <button
-                          disabled={isBatchProcessing || isSavingFeedback}
-                          onClick={() => {
-                            void handleSaveBatchFeedback(batch);
-                          }}
-                          className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${
-                            isBatchProcessing || isSavingFeedback
-                              ? 'cursor-not-allowed border-white/15 text-white/40'
-                              : 'border-[#00FFFF]/50 bg-[#00FFFF]/10 text-[#00FFFF] hover:bg-[#00FFFF]/20'
-                          }`}
-                        >
-                          {isSavingFeedback ? '保存中...' : '保存反馈'}
-                        </button>
-                      </div>
-
-                      <AnimatePresence>
-                        {openDownvotePopoverBatchId === batch.id && (
-                          <motion.div
-                            initial={{ opacity: 0, y: -6 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -6 }}
-                            transition={{ duration: 0.16 }}
-                            className="absolute right-3 top-11 z-30 w-[300px] rounded-xl border border-white/15 bg-[#111] p-3 shadow-2xl"
-                          >
-                            <div className="mb-2 flex items-center justify-between">
-                              <p className="text-xs text-white/85">点踩原因（至少 1 项）</p>
-                              <button
-                                onClick={() => setOpenDownvotePopoverBatchId(null)}
-                                className="rounded p-1 text-white/50 hover:bg-white/5 hover:text-white"
-                              >
-                                <X size={12} />
-                              </button>
-                            </div>
-                            <div className="grid grid-cols-2 gap-2">
-                              {DOWNVOTE_REASON_OPTIONS.map((reason) => {
-                                const active = feedbackDraft.downvoteReasons.includes(reason);
-                                return (
-                                  <button
-                                    key={reason}
-                                    onClick={() => handleToggleDownvoteReason(batch, reason)}
-                                    className={`rounded-md border px-2 py-1.5 text-[11px] transition-colors ${
-                                      active
-                                        ? 'border-red-400/60 bg-red-500/10 text-red-300'
-                                        : 'border-white/15 text-white/70 hover:border-white/30 hover:text-white'
-                                    }`}
-                                  >
-                                    {reason}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                            <button
-                              onClick={() => handleConfirmDownvote(batch)}
-                              className="mt-3 w-full rounded-md border border-red-400/60 bg-red-500/10 py-1.5 text-xs text-red-300 transition-colors hover:bg-red-500/20"
-                            >
-                              确认点踩原因
-                            </button>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-
                     {/* Batch Footer Actions */}
                     <div className="flex items-center gap-3 mt-1">
                       {isBatchProcessing && (
@@ -1542,6 +1417,77 @@ export default function App() {
                       >
                         <RefreshCw size={16} /> 再次生成
                       </button>
+                      <button
+                        disabled={isBatchProcessing || isSavingFeedback}
+                        onClick={() => handleToggleUpvote(batch)}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${
+                          feedbackDraft.vote === 'up'
+                            ? 'border border-[#00FFFF]/60 bg-[#00FFFF]/10 text-[#00FFFF]'
+                            : 'bg-[#1a1a1a] hover:bg-[#222] text-white/80'
+                        } ${isBatchProcessing || isSavingFeedback ? 'cursor-not-allowed opacity-40' : ''}`}
+                      >
+                        <ThumbsUp size={16} />
+                        点赞
+                      </button>
+                      <div className="relative">
+                        <button
+                          disabled={isBatchProcessing || isSavingFeedback}
+                          onClick={() => handleOpenDownvotePopover(batch)}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${
+                            feedbackDraft.vote === 'down'
+                              ? 'border border-red-400/60 bg-red-500/10 text-red-300'
+                              : 'bg-[#1a1a1a] hover:bg-[#222] text-white/80'
+                          } ${isBatchProcessing || isSavingFeedback ? 'cursor-not-allowed opacity-40' : ''}`}
+                        >
+                          <ThumbsDown size={16} />
+                          点踩
+                        </button>
+                        <AnimatePresence>
+                          {openDownvotePopoverBatchId === batch.id && (
+                            <motion.div
+                              initial={{ opacity: 0, y: -6 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -6 }}
+                              transition={{ duration: 0.16 }}
+                              className="absolute right-0 top-11 z-30 w-[300px] rounded-xl border border-white/15 bg-[#111] p-3 shadow-2xl"
+                            >
+                              <div className="mb-2 flex items-center justify-between">
+                                <p className="text-xs text-white/85">点踩原因（至少 1 项）</p>
+                                <button
+                                  onClick={() => setOpenDownvotePopoverBatchId(null)}
+                                  className="rounded p-1 text-white/50 hover:bg-white/5 hover:text-white"
+                                >
+                                  <X size={12} />
+                                </button>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2">
+                                {DOWNVOTE_REASON_OPTIONS.map((reason) => {
+                                  const active = feedbackDraft.downvoteReasons.includes(reason);
+                                  return (
+                                    <button
+                                      key={reason}
+                                      onClick={() => handleToggleDownvoteReason(batch, reason)}
+                                      className={`rounded-md border px-2 py-1.5 text-[11px] transition-colors ${
+                                        active
+                                          ? 'border-red-400/60 bg-red-500/10 text-red-300'
+                                          : 'border-white/15 text-white/70 hover:border-white/30 hover:text-white'
+                                      }`}
+                                    >
+                                      {reason}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              <button
+                                onClick={() => handleConfirmDownvote(batch)}
+                                className="mt-3 w-full rounded-md border border-red-400/60 bg-red-500/10 py-1.5 text-xs text-red-300 transition-colors hover:bg-red-500/20"
+                              >
+                                确认点踩原因
+                              </button>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
                       <div className="relative">
                         <button 
                           disabled={isBatchProcessing}
