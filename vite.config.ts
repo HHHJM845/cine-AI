@@ -5,6 +5,8 @@ import {defineConfig, loadEnv} from 'vite';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
+  const apiPort = (env.API_PORT || '8788').trim();
+  const apiProxyTarget = (env.VITE_API_PROXY_TARGET || `http://localhost:${apiPort}`).trim();
   return {
     plugins: [react(), tailwindcss()],
     define: {
@@ -17,8 +19,8 @@ export default defineConfig(({mode}) => {
     },
     server: {
       proxy: {
-        '/api': 'http://127.0.0.1:8787',
-        '/generated': 'http://127.0.0.1:8787',
+        '/api': apiProxyTarget,
+        '/generated': apiProxyTarget,
       },
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify this file watching behavior to prevent flickering during agent edits.

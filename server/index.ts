@@ -67,7 +67,7 @@ const app = createApp({
   },
   generatedStaticDir: generatedStorageDir,
 });
-const port = Number(process.env.API_PORT || 8787);
+const port = Number(process.env.API_PORT || 8788);
 
 app.listen(port, () => {
   // eslint-disable-next-line no-console
