@@ -1,4 +1,10 @@
-import type { GenerationBatch, GenerationBatchStatus, GenerationItemStatus } from '../types';
+import type {
+  BatchFeedbackVote,
+  GenerationBatch,
+  GenerationBatchFeedback,
+  GenerationBatchStatus,
+  GenerationItemStatus,
+} from '../types';
 
 type BatchRow = {
   id: string;
@@ -27,6 +33,15 @@ type RemovableItemRow = {
   image_path: string | null;
 };
 
+type BatchFeedbackRow = {
+  batch_id: string;
+  vote: BatchFeedbackVote;
+  downvote_reasons: string;
+  comment: string;
+  created_at: number;
+  updated_at: number;
+};
+
 function buildInPlaceholders(size: number): string {
   return Array.from({ length: size }).map(() => '?').join(', ');
 }
@@ -52,6 +67,33 @@ type InsertItemInput = {
   createdAt: number;
 };
 
+type UpsertBatchFeedbackInput = {
+  batchId: string;
+  vote: BatchFeedbackVote;
+  downvoteReasons: string[];
+  comment: string;
+  now?: number;
+};
+
+function normalizeReasons(vote: BatchFeedbackVote, reasons: string[]): string[] {
+  if (vote !== 'down') {
+    return [];
+  }
+  return reasons.map((reason) => reason.trim()).filter((reason) => reason.length > 0);
+}
+
+function parseReasons(rawReasons: string): string[] {
+  try {
+    const parsed = JSON.parse(rawReasons);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter((item): item is string => typeof item === 'string');
+  } catch {
+    return [];
+  }
+}
+
 function toBatchDto(row: BatchRow, items: ItemRow[]): GenerationBatch {
   return {
     id: row.id,
@@ -72,6 +114,17 @@ function toBatchDto(row: BatchRow, items: ItemRow[]): GenerationBatch {
   };
 }
 
+function toBatchFeedbackDto(row: BatchFeedbackRow): GenerationBatchFeedback {
+  return {
+    batchId: row.batch_id,
+    vote: row.vote,
+    downvoteReasons: parseReasons(row.downvote_reasons),
+    comment: row.comment,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 export function createGenerationRepository(db: any) {
   const insertBatchStmt = db.prepare(
     'INSERT INTO generation_batches (id, prompt, aspect_ratio, requested_count, scene_assist_used, model, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -84,6 +137,19 @@ export function createGenerationRepository(db: any) {
   const countItemsByBatchStmt = db.prepare('SELECT COUNT(1) as count FROM generation_items WHERE batch_id = ?');
   const deleteBatchStmt = db.prepare('DELETE FROM generation_batches WHERE id = ?');
   const deleteItemsStmt = db.prepare('DELETE FROM generation_items WHERE batch_id = ?');
+  const findBatchIdStmt = db.prepare('SELECT id FROM generation_batches WHERE id = ?');
+  const upsertBatchFeedbackStmt = db.prepare(
+    `
+      INSERT INTO generation_batch_feedback (batch_id, vote, downvote_reasons, comment, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(batch_id) DO UPDATE SET
+        vote = excluded.vote,
+        downvote_reasons = excluded.downvote_reasons,
+        comment = excluded.comment,
+        updated_at = excluded.updated_at
+    `,
+  );
+  const findBatchFeedbackStmt = db.prepare('SELECT * FROM generation_batch_feedback WHERE batch_id = ?');
 
   return {
     insertBatch(input: InsertBatchInput) {
@@ -165,6 +231,35 @@ export function createGenerationRepository(db: any) {
         const items = listItemsStmt.all(row.id) as ItemRow[];
         return toBatchDto(row, items);
       });
+    },
+    upsertBatchFeedback(input: UpsertBatchFeedbackInput): GenerationBatchFeedback | null {
+      const batchExists = Boolean(findBatchIdStmt.get(input.batchId));
+      if (!batchExists) {
+        return null;
+      }
+
+      const now = Number.isFinite(input.now) ? Number(input.now) : Date.now();
+      const normalizedVote = input.vote === 'up' || input.vote === 'down' ? input.vote : null;
+      const reasons = normalizeReasons(normalizedVote, input.downvoteReasons);
+      const reasonJson = JSON.stringify(reasons);
+      upsertBatchFeedbackStmt.run(input.batchId, normalizedVote, reasonJson, input.comment, now, now);
+      const row = findBatchFeedbackStmt.get(input.batchId) as BatchFeedbackRow | undefined;
+      if (!row) {
+        return null;
+      }
+      return toBatchFeedbackDto(row);
+    },
+    listBatchFeedbacks(input: { batchIds: string[] }): GenerationBatchFeedback[] {
+      const batchIds = Array.from(new Set(input.batchIds.map((id) => id.trim()).filter((id) => id.length > 0)));
+      if (batchIds.length === 0) {
+        return [];
+      }
+
+      const listBatchFeedbacksStmt = db.prepare(
+        `SELECT * FROM generation_batch_feedback WHERE batch_id IN (${buildInPlaceholders(batchIds.length)}) ORDER BY updated_at DESC`,
+      );
+      const rows = listBatchFeedbacksStmt.all(...batchIds) as BatchFeedbackRow[];
+      return rows.map((row) => toBatchFeedbackDto(row));
     },
   };
 }
