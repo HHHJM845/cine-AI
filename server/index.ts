@@ -65,8 +65,6 @@ const app = createApp({
       failedItemIds: result.failedItemIds,
     };
   },
-  upsertGenerationBatchFeedback: async (input) => repository.upsertBatchFeedback(input),
-  listGenerationBatchFeedbacks: async ({ batchIds }) => repository.listBatchFeedbacks({ batchIds }),
   generatedStaticDir: generatedStorageDir,
 });
 const port = Number(process.env.API_PORT || 8787);
