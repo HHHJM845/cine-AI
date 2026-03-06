@@ -1,17 +1,11 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Compass, Wand2, FolderOpen, Image as ImageIcon, Video, Box, Upload, Download, ArrowLeft, Sparkles, Search, ChevronDown, CheckSquare, ListFilter, LayoutGrid, List, CheckCircle2, Circle, Trash2, Heart, Check, Edit, RefreshCw, MoreHorizontal, ThumbsUp, ThumbsDown, X } from 'lucide-react';
+import { Compass, Wand2, FolderOpen, Image as ImageIcon, Video, Box, Upload, Download, ArrowLeft, Sparkles, Search, ChevronDown, CheckSquare, ListFilter, LayoutGrid, List, CheckCircle2, Circle, Trash2, Heart, Check, Edit, RefreshCw, MoreHorizontal } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { imageToPrompt } from './services/image-to-prompt';
 import { fetchGenerationBatches } from './services/generation-batches';
 import { generateImages, type GenerationBatch, type GenerateImagesRequest } from './services/generate-images';
 import { buildDownloadFileName, downloadImage, downloadImages } from './services/image-download';
 import { deleteGenerationAssets } from './services/delete-generation-assets';
-import {
-  fetchGenerationBatchFeedbacks,
-  upsertGenerationBatchFeedback,
-  type GenerationBatchFeedback,
-  type GenerationBatchFeedbackVote,
-} from './services/generation-batch-feedback';
 import { SUPPORTED_ASPECT_RATIOS, toAspectRatio } from './utils/aspect-ratios';
 import { toAssetItemsFromBatches } from './features/assets/asset-items';
 import { dequeueStartableJobs } from './features/generation/job-queue';
@@ -150,13 +144,6 @@ type UiBatch = {
   status: 'queued' | 'running' | 'completed' | 'partial_failed' | 'failed';
   images: UiBatchImage[];
   errorMessage?: string;
-  feedback: GenerationBatchFeedback | null;
-};
-
-type BatchFeedbackDraft = {
-  vote: GenerationBatchFeedbackVote;
-  downvoteReasons: string[];
-  comment: string;
 };
 
 function toUiBatch(batch: GenerationBatch): UiBatch {
@@ -177,13 +164,10 @@ function toUiBatch(batch: GenerationBatch): UiBatch {
       status: item.status,
       errorMessage: item.errorMessage,
     })),
-    feedback: null,
   };
 }
 
 const MAX_CONCURRENT_GENERATIONS = 2;
-const FEEDBACK_COMMENT_MAX_LENGTH = 500;
-const DOWNVOTE_REASON_OPTIONS = ['风格不符', '主体错误', '构图问题', '细节瑕疵', '清晰度不足', '与提示词不一致'] as const;
 
 type QueueJob = {
   id: string;
@@ -228,15 +212,6 @@ function toUiBatchFromJob(job: GenerationUiJob, sceneAssistUsed = false): UiBatc
       errorMessage: item.errorMessage,
     })),
     errorMessage: job.errorMessage,
-    feedback: null,
-  };
-}
-
-function toFeedbackDraft(feedback: GenerationBatchFeedback | null | undefined): BatchFeedbackDraft {
-  return {
-    vote: feedback?.vote ?? null,
-    downvoteReasons: Array.isArray(feedback?.downvoteReasons) ? [...feedback.downvoteReasons] : [],
-    comment: feedback?.comment ?? '',
   };
 }
 
@@ -331,7 +306,6 @@ export default function App() {
   const [isLoadingBatches, setIsLoadingBatches] = useState(false);
   const [generationError, setGenerationError] = useState('');
   const [downloadMessage, setDownloadMessage] = useState('');
-  const [feedbackMessage, setFeedbackMessage] = useState('');
   const uploadAbortRef = useRef<AbortController | null>(null);
   const latestUploadSeqRef = useRef(0);
   const generationJobsRef = useRef<QueueJob[]>([]);
@@ -341,9 +315,6 @@ export default function App() {
   // Generation Batches State
   const [generationBatches, setGenerationBatches] = useState<UiBatch[]>([]);
   const [openBatchMenu, setOpenBatchMenu] = useState<string | null>(null);
-  const [batchFeedbackDrafts, setBatchFeedbackDrafts] = useState<Record<string, BatchFeedbackDraft>>({});
-  const [openDownvotePopoverBatchId, setOpenDownvotePopoverBatchId] = useState<string | null>(null);
-  const [savingFeedbackBatchId, setSavingFeedbackBatchId] = useState<string | null>(null);
 
   // Assets View State
   const [isBatchMode, setIsBatchMode] = useState(false);
@@ -387,50 +358,19 @@ export default function App() {
   }, [downloadMessage]);
 
   useEffect(() => {
-    if (!feedbackMessage) {
-      return;
-    }
-    const timer = setTimeout(() => setFeedbackMessage(''), 4000);
-    return () => clearTimeout(timer);
-  }, [feedbackMessage]);
-
-  useEffect(() => {
     let active = true;
     setIsLoadingBatches(true);
     setGenerationError('');
 
     fetchGenerationBatches()
-      .then(async (batches) => {
+      .then((batches) => {
         if (!active) return;
         const serverBatches = batches.map(toUiBatch);
-        let serverFeedbacks: GenerationBatchFeedback[] = [];
-        try {
-          serverFeedbacks = await fetchGenerationBatchFeedbacks(serverBatches.map((batch) => batch.id));
-        } catch (error) {
-          if (active) {
-            const message = error instanceof Error ? error.message : '反馈加载失败，可稍后重试';
-            setFeedbackMessage(`反馈加载失败：${message}`);
-          }
-        }
-        const feedbackByBatchId = new Map(serverFeedbacks.map((feedback) => [feedback.batchId, feedback]));
-        const serverBatchesWithFeedback = serverBatches.map((batch) => ({
-          ...batch,
-          feedback: feedbackByBatchId.get(batch.id) ?? null,
-        }));
         setGenerationBatches((prev) => {
           const inFlightBatches = prev.filter((batch) => batch.status === 'queued' || batch.status === 'running');
           const inFlightIds = new Set(inFlightBatches.map((batch) => batch.id));
-          const dedupedServer = serverBatchesWithFeedback.filter((batch) => !inFlightIds.has(batch.id));
+          const dedupedServer = serverBatches.filter((batch) => !inFlightIds.has(batch.id));
           return [...inFlightBatches, ...dedupedServer];
-        });
-        setBatchFeedbackDrafts((prev) => {
-          const next = { ...prev };
-          serverBatchesWithFeedback.forEach((batch) => {
-            if (!next[batch.id]) {
-              next[batch.id] = toFeedbackDraft(batch.feedback);
-            }
-          });
-          return next;
         });
       })
       .catch((error) => {
@@ -653,13 +593,6 @@ export default function App() {
 
   const handleDeleteBatch = (batchId: string) => {
     setGenerationBatches(prev => prev.filter(b => b.id !== batchId));
-    setBatchFeedbackDrafts((prev) => {
-      const next = { ...prev };
-      delete next[batchId];
-      return next;
-    });
-    setOpenDownvotePopoverBatchId((prev) => (prev === batchId ? null : prev));
-    setSavingFeedbackBatchId((prev) => (prev === batchId ? null : prev));
     setOpenBatchMenu(null);
   };
 
@@ -827,120 +760,6 @@ export default function App() {
 
   const handleDeleteSelectedAssets = async () => {
     await handleDeleteAssets(Array.from(selectedAssets));
-  };
-
-  const getBatchFeedbackDraft = (batch: UiBatch): BatchFeedbackDraft => {
-    return batchFeedbackDrafts[batch.id] ?? toFeedbackDraft(batch.feedback);
-  };
-
-  const setBatchFeedbackDraft = (batchId: string, nextDraft: BatchFeedbackDraft) => {
-    setBatchFeedbackDrafts((prev) => ({
-      ...prev,
-      [batchId]: {
-        vote: nextDraft.vote,
-        downvoteReasons: Array.from(new Set(nextDraft.downvoteReasons)),
-        comment: nextDraft.comment,
-      },
-    }));
-  };
-
-  const handleToggleUpvote = (batch: UiBatch) => {
-    const draft = getBatchFeedbackDraft(batch);
-    const nextVote: GenerationBatchFeedbackVote = draft.vote === 'up' ? null : 'up';
-    setBatchFeedbackDraft(batch.id, {
-      vote: nextVote,
-      downvoteReasons: [],
-      comment: draft.comment,
-    });
-    setOpenDownvotePopoverBatchId((prev) => (prev === batch.id ? null : prev));
-  };
-
-  const handleOpenDownvotePopover = (batch: UiBatch) => {
-    const draft = getBatchFeedbackDraft(batch);
-    setBatchFeedbackDraft(batch.id, draft);
-    setOpenDownvotePopoverBatchId(batch.id);
-  };
-
-  const handleToggleDownvoteReason = (batch: UiBatch, reason: string) => {
-    const draft = getBatchFeedbackDraft(batch);
-    const reasonSet = new Set(draft.downvoteReasons);
-    if (reasonSet.has(reason)) {
-      reasonSet.delete(reason);
-    } else {
-      reasonSet.add(reason);
-    }
-    setBatchFeedbackDraft(batch.id, {
-      vote: draft.vote,
-      downvoteReasons: Array.from(reasonSet),
-      comment: draft.comment,
-    });
-  };
-
-  const handleConfirmDownvote = (batch: UiBatch) => {
-    const draft = getBatchFeedbackDraft(batch);
-    if (draft.downvoteReasons.length === 0) {
-      setFeedbackMessage('请选择至少一个点踩原因');
-      return;
-    }
-    setBatchFeedbackDraft(batch.id, {
-      vote: 'down',
-      downvoteReasons: draft.downvoteReasons,
-      comment: draft.comment,
-    });
-    setOpenDownvotePopoverBatchId(null);
-  };
-
-  const handleFeedbackCommentChange = (batch: UiBatch, comment: string) => {
-    const draft = getBatchFeedbackDraft(batch);
-    setBatchFeedbackDraft(batch.id, {
-      vote: draft.vote,
-      downvoteReasons: draft.downvoteReasons,
-      comment,
-    });
-  };
-
-  const handleSaveBatchFeedback = async (batch: UiBatch) => {
-    if (batch.status === 'queued' || batch.status === 'running') {
-      return;
-    }
-
-    const draft = getBatchFeedbackDraft(batch);
-    if (draft.comment.length > FEEDBACK_COMMENT_MAX_LENGTH) {
-      setFeedbackMessage(`意见内容不能超过 ${FEEDBACK_COMMENT_MAX_LENGTH} 字`);
-      return;
-    }
-    if (draft.vote === 'down' && draft.downvoteReasons.length === 0) {
-      setOpenDownvotePopoverBatchId(batch.id);
-      setFeedbackMessage('请选择至少一个点踩原因');
-      return;
-    }
-
-    setSavingFeedbackBatchId(batch.id);
-    try {
-      const feedback = await upsertGenerationBatchFeedback({
-        batchId: batch.id,
-        vote: draft.vote,
-        downvoteReasons: draft.vote === 'down' ? draft.downvoteReasons : [],
-        comment: draft.comment,
-      });
-      setGenerationBatches((prev) =>
-        prev.map((item) =>
-          item.id === batch.id
-            ? {
-                ...item,
-                feedback,
-              }
-            : item,
-        ),
-      );
-      setBatchFeedbackDraft(batch.id, toFeedbackDraft(feedback));
-      setFeedbackMessage('反馈已保存');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '保存失败，请稍后重试';
-      setFeedbackMessage(`保存失败：${message}`);
-    } finally {
-      setSavingFeedbackBatchId(null);
-    }
   };
 
   return (
@@ -1291,18 +1110,6 @@ export default function App() {
                   </div>
                 )}
 
-                {feedbackMessage && (
-                  <div
-                    className={`rounded-lg border px-3 py-2 text-xs ${
-                      feedbackMessage.startsWith('保存失败') || feedbackMessage.startsWith('反馈加载失败') || feedbackMessage.startsWith('请选择')
-                        ? 'border-red-400/40 bg-red-500/10 text-red-300'
-                        : 'border-[#00FFFF]/40 bg-[#00FFFF]/10 text-[#00FFFF]'
-                    }`}
-                  >
-                    {feedbackMessage}
-                  </div>
-                )}
-
                 {isLoadingBatches && (
                   <div className="text-sm text-white/40">加载历史批次中...</div>
                 )}
@@ -1311,13 +1118,7 @@ export default function App() {
                   <div className="text-sm text-white/40">暂无生成记录，输入提示词后点击生成。</div>
                 )}
 
-                {generationBatches.map((batch) => {
-                  const feedbackDraft = getBatchFeedbackDraft(batch);
-                  const isBatchProcessing = batch.status === 'queued' || batch.status === 'running';
-                  const isSavingFeedback = savingFeedbackBatchId === batch.id;
-                  const commentLength = feedbackDraft.comment.length;
-
-                  return (
+                {generationBatches.map((batch) => (
                   <div key={batch.id} className="flex flex-col gap-3">
                     {/* Batch Header */}
                     <div className="flex justify-between items-start gap-4">
@@ -1397,134 +1198,16 @@ export default function App() {
                       })}
                     </div>
 
-                    {/* Batch Feedback */}
-                    <div className="relative rounded-xl border border-white/10 bg-white/[0.02] p-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          disabled={isBatchProcessing || isSavingFeedback}
-                          onClick={() => handleToggleUpvote(batch)}
-                          className={`flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
-                            feedbackDraft.vote === 'up'
-                              ? 'border-[#00FFFF]/60 bg-[#00FFFF]/10 text-[#00FFFF]'
-                              : 'border-white/15 text-white/70 hover:border-white/30 hover:text-white'
-                          } ${isBatchProcessing || isSavingFeedback ? 'cursor-not-allowed opacity-40' : ''}`}
-                        >
-                          <ThumbsUp size={13} />
-                          点赞
-                        </button>
-                        <button
-                          disabled={isBatchProcessing || isSavingFeedback}
-                          onClick={() => handleOpenDownvotePopover(batch)}
-                          className={`flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
-                            feedbackDraft.vote === 'down'
-                              ? 'border-red-400/60 bg-red-500/10 text-red-300'
-                              : 'border-white/15 text-white/70 hover:border-white/30 hover:text-white'
-                          } ${isBatchProcessing || isSavingFeedback ? 'cursor-not-allowed opacity-40' : ''}`}
-                        >
-                          <ThumbsDown size={13} />
-                          点踩
-                        </button>
-                        {feedbackDraft.vote === 'down' && feedbackDraft.downvoteReasons.length > 0 && (
-                          <span className="text-[11px] text-red-300/90">已选 {feedbackDraft.downvoteReasons.length} 项点踩原因</span>
-                        )}
-                        <div className="ml-auto text-[10px] text-white/45">{commentLength}/{FEEDBACK_COMMENT_MAX_LENGTH}</div>
-                      </div>
-
-                      <textarea
-                        value={feedbackDraft.comment}
-                        disabled={isBatchProcessing || isSavingFeedback}
-                        onChange={(event) => handleFeedbackCommentChange(batch, event.target.value)}
-                        placeholder="补充意见（可选，最多 500 字）"
-                        className={`mt-2 min-h-[72px] w-full resize-y rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/85 placeholder-white/30 focus:outline-none focus:border-[#00FFFF]/40 ${
-                          isBatchProcessing || isSavingFeedback ? 'cursor-not-allowed opacity-40' : ''
-                        }`}
-                      />
-
-                      <div className="mt-2 flex items-center justify-end gap-2">
-                        <button
-                          disabled={isBatchProcessing || isSavingFeedback}
-                          onClick={() => {
-                            setBatchFeedbackDraft(batch.id, toFeedbackDraft(batch.feedback));
-                            setOpenDownvotePopoverBatchId((prev) => (prev === batch.id ? null : prev));
-                          }}
-                          className={`rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/70 transition-colors hover:border-white/30 hover:text-white ${
-                            isBatchProcessing || isSavingFeedback ? 'cursor-not-allowed opacity-40' : ''
-                          }`}
-                        >
-                          重置
-                        </button>
-                        <button
-                          disabled={isBatchProcessing || isSavingFeedback}
-                          onClick={() => {
-                            void handleSaveBatchFeedback(batch);
-                          }}
-                          className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${
-                            isBatchProcessing || isSavingFeedback
-                              ? 'cursor-not-allowed border-white/15 text-white/40'
-                              : 'border-[#00FFFF]/50 bg-[#00FFFF]/10 text-[#00FFFF] hover:bg-[#00FFFF]/20'
-                          }`}
-                        >
-                          {isSavingFeedback ? '保存中...' : '保存反馈'}
-                        </button>
-                      </div>
-
-                      <AnimatePresence>
-                        {openDownvotePopoverBatchId === batch.id && (
-                          <motion.div
-                            initial={{ opacity: 0, y: -6 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -6 }}
-                            transition={{ duration: 0.16 }}
-                            className="absolute right-3 top-11 z-30 w-[300px] rounded-xl border border-white/15 bg-[#111] p-3 shadow-2xl"
-                          >
-                            <div className="mb-2 flex items-center justify-between">
-                              <p className="text-xs text-white/85">点踩原因（至少 1 项）</p>
-                              <button
-                                onClick={() => setOpenDownvotePopoverBatchId(null)}
-                                className="rounded p-1 text-white/50 hover:bg-white/5 hover:text-white"
-                              >
-                                <X size={12} />
-                              </button>
-                            </div>
-                            <div className="grid grid-cols-2 gap-2">
-                              {DOWNVOTE_REASON_OPTIONS.map((reason) => {
-                                const active = feedbackDraft.downvoteReasons.includes(reason);
-                                return (
-                                  <button
-                                    key={reason}
-                                    onClick={() => handleToggleDownvoteReason(batch, reason)}
-                                    className={`rounded-md border px-2 py-1.5 text-[11px] transition-colors ${
-                                      active
-                                        ? 'border-red-400/60 bg-red-500/10 text-red-300'
-                                        : 'border-white/15 text-white/70 hover:border-white/30 hover:text-white'
-                                    }`}
-                                  >
-                                    {reason}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                            <button
-                              onClick={() => handleConfirmDownvote(batch)}
-                              className="mt-3 w-full rounded-md border border-red-400/60 bg-red-500/10 py-1.5 text-xs text-red-300 transition-colors hover:bg-red-500/20"
-                            >
-                              确认点踩原因
-                            </button>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-
                     {/* Batch Footer Actions */}
                     <div className="flex items-center gap-3 mt-1">
-                      {isBatchProcessing && (
+                      {(batch.status === 'queued' || batch.status === 'running') && (
                         <div className="text-xs text-white/40">该批次正在处理中，完成后可重新编辑或再次生成。</div>
                       )}
                       <button 
                         onClick={() => handleReEdit(batch)}
-                        disabled={isBatchProcessing}
+                        disabled={batch.status === 'queued' || batch.status === 'running'}
                         className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${
-                          isBatchProcessing
+                          batch.status === 'queued' || batch.status === 'running'
                             ? 'bg-[#1a1a1a] text-white/30 cursor-not-allowed'
                             : 'bg-[#1a1a1a] hover:bg-[#222] text-white/80'
                         }`}
@@ -1533,9 +1216,9 @@ export default function App() {
                       </button>
                       <button 
                         onClick={() => { void handleRegenerate(batch); }}
-                        disabled={isBatchProcessing}
+                        disabled={batch.status === 'queued' || batch.status === 'running'}
                         className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${
-                          isBatchProcessing
+                          batch.status === 'queued' || batch.status === 'running'
                             ? 'bg-[#1a1a1a] text-white/30 cursor-not-allowed'
                             : 'bg-[#1a1a1a] hover:bg-[#222] text-white/80'
                         }`}
@@ -1544,10 +1227,10 @@ export default function App() {
                       </button>
                       <div className="relative">
                         <button 
-                          disabled={isBatchProcessing}
+                          disabled={batch.status === 'queued' || batch.status === 'running'}
                           onClick={() => setOpenBatchMenu(openBatchMenu === batch.id ? null : batch.id)}
                           className={`flex items-center justify-center w-9 h-9 rounded-lg transition-colors ${
-                            isBatchProcessing
+                            batch.status === 'queued' || batch.status === 'running'
                               ? 'bg-[#1a1a1a] text-white/30 cursor-not-allowed'
                               : openBatchMenu === batch.id
                                 ? 'bg-[#222] text-white/80'
@@ -1579,8 +1262,7 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-                  );
-                })}
+                ))}
               </div>
             </section>
           </>
