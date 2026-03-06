@@ -1,8 +1,16 @@
 import express from 'express';
 import multer from 'multer';
 import path from 'node:path';
-import type { AnalyzeImageFn, DeleteGenerationItemsFn, GenerateImagesFn, ListGenerationBatchesFn } from './types';
+import type {
+  AnalyzeImageFn,
+  DeleteGenerationItemsFn,
+  GenerateImagesFn,
+  ListGenerationBatchFeedbacksFn,
+  ListGenerationBatchesFn,
+  UpsertGenerationBatchFeedbackFn,
+} from './types';
 import { validateImageFile } from './validation/image-file';
+import { validateGenerationBatchFeedbackRequest } from './validation/generation-batch-feedback-request';
 import { validateGenerateRequest } from './validation/generate-request';
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -11,6 +19,8 @@ type AppDeps = {
   analyzeImage: AnalyzeImageFn;
   generateImages?: GenerateImagesFn;
   listGenerationBatches?: ListGenerationBatchesFn;
+  upsertGenerationBatchFeedback?: UpsertGenerationBatchFeedbackFn;
+  listGenerationBatchFeedbacks?: ListGenerationBatchFeedbacksFn;
   deleteGenerationItems?: DeleteGenerationItemsFn;
   generatedStaticDir?: string;
 };
@@ -122,6 +132,72 @@ export function createApp(depsOrAnalyzeImage: AnalyzeImageFn | AppDeps) {
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'unknown error';
       return res.status(500).json({ error: `failed to delete generation assets: ${reason}` });
+    }
+  });
+
+  app.post('/api/generation-batch-feedback', async (req, res) => {
+    if (!deps.upsertGenerationBatchFeedback) {
+      return res.status(501).json({ error: 'batch feedback service not configured' });
+    }
+
+    const validationError = validateGenerationBatchFeedbackRequest(req.body || {});
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+
+    const batchId = String(req.body.batchId).trim();
+    const vote = req.body.vote === 'up' || req.body.vote === 'down' ? req.body.vote : null;
+    const downvoteReasons = Array.isArray(req.body.downvoteReasons)
+      ? req.body.downvoteReasons
+          .filter((item: unknown): item is string => typeof item === 'string')
+          .map((item: string) => item.trim())
+          .filter((item: string) => item.length > 0)
+      : [];
+    const comment = typeof req.body.comment === 'string' ? req.body.comment : '';
+
+    try {
+      const feedback = await deps.upsertGenerationBatchFeedback({
+        batchId,
+        vote,
+        downvoteReasons,
+        comment,
+      });
+      if (!feedback) {
+        return res.status(404).json({ error: 'batch not found' });
+      }
+      return res.status(200).json({ feedback });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'unknown error';
+      return res.status(500).json({ error: `failed to save batch feedback: ${reason}` });
+    }
+  });
+
+  app.get('/api/generation-batch-feedback', async (req, res) => {
+    if (!deps.listGenerationBatchFeedbacks) {
+      return res.status(200).json({ feedbacks: [] });
+    }
+
+    const rawBatchIds = req.query.batchIds;
+    const mergedBatchIds =
+      typeof rawBatchIds === 'string'
+        ? rawBatchIds
+        : Array.isArray(rawBatchIds)
+          ? rawBatchIds.join(',')
+          : '';
+    const batchIds = mergedBatchIds
+      .split(',')
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    if (batchIds.length === 0) {
+      return res.status(200).json({ feedbacks: [] });
+    }
+
+    try {
+      const feedbacks = await deps.listGenerationBatchFeedbacks({ batchIds });
+      return res.status(200).json({ feedbacks });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'unknown error';
+      return res.status(500).json({ error: `failed to load generation batch feedback: ${reason}` });
     }
   });
 
