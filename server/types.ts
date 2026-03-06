@@ -23,7 +23,6 @@ export type GeneratedImageBinary = {
 
 export type GenerationBatchStatus = 'completed' | 'partial_failed' | 'failed';
 export type GenerationItemStatus = 'success' | 'failed';
-export type BatchFeedbackVote = 'up' | 'down' | null;
 
 export type GenerationItem = {
   id: string;
@@ -44,28 +43,6 @@ export type GenerationBatch = {
   createdAt: number;
   items: GenerationItem[];
 };
-
-export type GenerationBatchFeedback = {
-  batchId: string;
-  vote: BatchFeedbackVote;
-  downvoteReasons: string[];
-  comment: string;
-  createdAt: number;
-  updatedAt: number;
-};
-
-export type UpsertGenerationBatchFeedbackInput = {
-  batchId: string;
-  vote: BatchFeedbackVote;
-  downvoteReasons: string[];
-  comment: string;
-};
-
-export type UpsertGenerationBatchFeedbackFn = (
-  input: UpsertGenerationBatchFeedbackInput,
-) => Promise<GenerationBatchFeedback | null>;
-
-export type ListGenerationBatchFeedbacksFn = (input: { batchIds: string[] }) => Promise<GenerationBatchFeedback[]>;
 
 export type GenerateImagesFn = (input: GenerateImagesInput) => Promise<GenerationBatch>;
 export type ListGenerationBatchesFn = (input: { limit: number; cursor?: number }) => Promise<GenerationBatch[]>;

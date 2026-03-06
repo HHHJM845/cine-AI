@@ -30,16 +30,6 @@ export function createDb(filePath: string) {
       created_at INTEGER NOT NULL,
       FOREIGN KEY (batch_id) REFERENCES generation_batches(id)
     );
-
-    CREATE TABLE IF NOT EXISTS generation_batch_feedback (
-      batch_id TEXT PRIMARY KEY,
-      vote TEXT,
-      downvote_reasons TEXT NOT NULL DEFAULT '[]',
-      comment TEXT NOT NULL DEFAULT '',
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (batch_id) REFERENCES generation_batches(id)
-    );
   `);
 
   const batchColumns = db.prepare("PRAGMA table_info(generation_batches)").all() as Array<{ name: string }>;
