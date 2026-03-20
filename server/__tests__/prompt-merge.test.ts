@@ -59,8 +59,9 @@ describe('createPromptMergeService', () => {
       subSceneId: 'movie_poster',
     });
 
-    const request = fetchImpl.mock.calls[0]?.[1];
-    const body = JSON.parse(String(request?.body));
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const request = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(request[1].body));
     expect(body.messages[0].content).toContain('用户主体');
     expect(body.messages[1].content).toContain('场景: poster/movie_poster');
     expect(body.messages[1].content).toContain('场景预设');
@@ -82,14 +83,51 @@ describe('createPromptMergeService', () => {
       subSceneId: 'cover',
     });
 
-    const request = generateContent.mock.calls[0]?.[0] as {
+    expect(generateContent).toHaveBeenCalledTimes(1);
+    const request = (generateContent.mock.calls[0] as unknown as [
+      {
+        contents: Array<{ text: string }>;
+      },
+    ])[0];
+    const contents = request as {
       contents: Array<{ text: string }>;
     };
-    expect(request.contents[0].text).toContain('用户主体');
-    expect(request.contents[1].text).toContain('场景: short_video/cover');
-    expect(request.contents[1].text).toContain('场景预设');
-    expect(request.contents[1].text).toContain('核心用途：宣发短视频封面图');
-    expect(request.contents[1].text).toContain('用户输入');
-    expect(request.contents[1].text).toContain('一个人冲出火场');
+    expect(contents.contents[0].text).toContain('用户主体');
+    expect(contents.contents[1].text).toContain('场景: short_video/cover');
+    expect(contents.contents[1].text).toContain('场景预设');
+    expect(contents.contents[1].text).toContain('核心用途：宣发短视频封面图');
+    expect(contents.contents[1].text).toContain('用户输入');
+    expect(contents.contents[1].text).toContain('一个人冲出火场');
+  });
+
+  it('tells providers to keep scene-label-specific visual intent instead of generating generic prompts', async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: 'final merged prompt' } }],
+        }),
+        { status: 200 },
+      ),
+    );
+    const mergePrompt = createOpenAIPromptMerge({
+      apiKey: 'test-key',
+      baseUrl: 'https://example.com',
+      model: 'test-model',
+      fetchImpl,
+    });
+
+    await mergePrompt({
+      presetPrompt: '核心用途：宣发短视频封面图',
+      userPrompt: '一个女人站在雨夜街头',
+      primarySceneId: 'short_video',
+      subSceneId: 'cover',
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const request = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(request[1].body));
+    expect(body.messages[0].content).toContain('影视用途');
+    expect(body.messages[0].content).toContain('视觉语言');
+    expect(body.messages[0].content).toContain('不能输出泛用提示词');
   });
 });
