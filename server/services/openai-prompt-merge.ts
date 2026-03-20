@@ -53,11 +53,16 @@ async function extractErrorMessage(response: Response): Promise<string> {
 }
 
 function buildUserContent(input: PromptMergeInput): string {
-  const sceneLabel =
-    input.primarySceneId && input.subSceneId
-      ? `场景: ${input.primarySceneId}/${input.subSceneId}\n`
-      : '';
-  return `${sceneLabel}场景预制提示词:\n${input.presetPrompt}\n\n用户输入提示词:\n${input.userPrompt}`;
+  const lines = [
+    input.primarySceneId && input.subSceneId ? `场景: ${input.primarySceneId}/${input.subSceneId}` : '',
+    '场景预设:',
+    input.presetPrompt,
+    '',
+    '用户输入:',
+    input.userPrompt,
+  ];
+
+  return lines.filter((line, index) => line || index > 0).join('\n');
 }
 
 export function createOpenAIPromptMerge(options: OpenAIPromptMergeOptions) {

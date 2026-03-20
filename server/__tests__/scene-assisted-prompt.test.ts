@@ -43,7 +43,10 @@ describe('createSceneAssistedPromptService', () => {
   });
 
   it('returns merged prompt when scene preset exists', async () => {
-    const loadScenePrompt = vi.fn(async () => ({ presetPrompt: 'preset', sourcePath: 'x' }));
+    const loadScenePrompt = vi.fn(async () => ({
+      presetPrompt: '核心用途：院线电影主海报',
+      sourcePath: 'server/prompts/poster/movie_poster.md',
+    }));
     const mergePrompt = vi.fn(async () => 'merged prompt');
     const resolvePrompt = createSceneAssistedPromptService({
       loadScenePrompt,
@@ -51,7 +54,7 @@ describe('createSceneAssistedPromptService', () => {
     });
 
     const result = await resolvePrompt({
-      prompt: 'user prompt',
+      prompt: '一个女人站在雨夜街头',
       enableSceneAssist: true,
       primarySceneId: 'poster',
       subSceneId: 'movie_poster',
@@ -59,8 +62,8 @@ describe('createSceneAssistedPromptService', () => {
 
     expect(result).toBe('merged prompt');
     expect(mergePrompt).toHaveBeenCalledWith({
-      presetPrompt: 'preset',
-      userPrompt: 'user prompt',
+      presetPrompt: '核心用途：院线电影主海报',
+      userPrompt: '一个女人站在雨夜街头',
       primarySceneId: 'poster',
       subSceneId: 'movie_poster',
     });
